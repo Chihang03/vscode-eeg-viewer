@@ -1,0 +1,16 @@
+.vscode/**
+test/**
+scripts/**
+docs/**
+*.vsix
+node_modules/**
+.gitignore
+.github/**
+.editorconfig
+.gitattributes
+package-lock.json
+CONTRIBUTING.md
+SECURITY.md
+release.md
+assets/README.md
+SHA256SUMS.txt

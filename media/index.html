@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src {{CSP}}; script-src 'nonce-{{NONCE}}' blob:; worker-src blob:; connect-src {{CSP}}; img-src {{CSP}} data:;">
+  <title>Kieran EEG Viewer · 波形与 PSD</title>
+  <link rel="stylesheet" href="{{STYLE}}">
+</head>
+<body data-worker="{{WORKER}}" data-dsp="{{DSP}}">
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><img class="brand-mark" src="{{ICON}}" alt="Kieran EEG Viewer Logo"><div><strong>Kieran EEG Viewer</strong><span>实验信号工作台</span></div><span class="version">{{VERSION}}</span></div>
+      <div class="source-controls">
+        <label for="profile">数据模式</label>
+        <select id="profile"><option value="auto">自动识别</option><option value="ssvep">Bigshen SSVEP</option><option value="assr">ASSR</option></select>
+        <div class="button-row"><button id="open" class="primary">打开采集目录</button><button id="refresh" title="重新扫描文件" aria-label="重新扫描">↻</button></div>
+      </div>
+      <div class="explorer-heading"><span>实验记录</span><span id="record-count" class="count">0</span></div>
+      <div id="session-list" class="session-list"><p class="muted empty-hint">打开一个采集目录，开始查看波形与频谱。</p></div>
+      <div class="trial-browser" hidden>
+        <label for="search" class="sr-only">筛选条件或 trial</label><input id="search" type="search" placeholder="筛选频率、条件或 trial…">
+        <label class="checkbox muted"><input id="valid-only" type="checkbox">仅显示采集标记有效</label>
+        <div id="trial-list" class="trial-list" role="list" aria-label="实验区间"></div>
+      </div>
+      <div class="sidebar-footer"><span class="local-dot"></span> 本地计算 · 原始记录只读</div>
+    </aside>
+    <main>
+      <header class="page-header">
+        <div><div class="eyebrow" id="breadcrumb">SIGNAL EXPLORER</div><h1 id="record-title">从一段信号开始</h1><div id="record-subtitle" class="muted">Bigshen SSVEP / ASSR</div></div>
+        <div class="header-actions"><button id="previous" disabled aria-label="上一个 trial" title="上一个 trial（Alt + ←）">←</button><button id="next" disabled aria-label="下一个 trial" title="下一个 trial（Alt + →）">→</button><button id="export-png" disabled>导出图像</button></div>
+      </header>
+      <div id="notice" class="notice" role="status" hidden></div>
+      <section id="welcome" class="welcome">
+        <img class="welcome-wave" src="{{ICON}}" alt="Kieran EEG Viewer Logo"><div class="eyebrow">PROJECT-SPECIFIC EEG VIEWER</div>
+        <h2>波形与频谱，在一个视图里。</h2><p>识别你们现有的采集文件，按实验条件快速翻阅。<br>选中一段波形，即可查看对应的功率谱密度。</p>
+        <div class="welcome-cards"><button data-open-profile="ssvep"><strong>Bigshen SSVEP <span>↗</span></strong><small>独立 trial · 刺激频率 · 显示事件</small><code>*_eeg.csv + *_meta.json</code></button><button data-open-profile="assr"><strong>ASSR <span>↗</span></strong><small>连续记录 · AM 条件 · Baseline / Rest</small><code>session.json + continuous_eeg.csv</code></button></div>
+        <button id="welcome-open" class="primary">打开目录，自动识别</button>
+      </section>
+      <div id="workspace" hidden>
+        <div class="signal-toolbar">
+          <div id="channels" class="channels"></div>
+          <div class="toolbar-separator"></div>
+          <label>信号<select id="signal-mode"><option value="raw">原始</option><option value="filtered">滤波</option></select></label>
+          <label class="filter-control" hidden>带通<input id="highpass" type="number" value="0.5" min="0.01" step="0.1" aria-label="带通下限 Hz">—<input id="lowpass" type="number" value="60" min="1" step="1" aria-label="带通上限 Hz">Hz</label>
+          <label class="checkbox"><input id="notch" type="checkbox">50 Hz 陷波</label>
+          <label class="checkbox"><input id="center-wave" type="checkbox" checked>居中显示</label>
+          <label>纵轴<select id="amplitude"><option value="auto">自动</option><option value="50">±50</option><option value="100">±100</option><option value="250">±250</option><option value="500">±500</option><option value="1000">±1000</option></select></label>
+        </div>
+        <section class="plot-card waveform-card">
+          <div class="card-header"><div><span class="section-number">01</span><h2>EEG 波形</h2><span id="wave-unit" class="pill">μV</span></div><div class="plot-actions"><button id="zoom-selection" disabled>放大选区</button><button id="zoom-in">＋</button><button id="zoom-out">−</button><button id="reset-view">全段</button><button id="clear-selection" disabled>清除选区</button></div></div>
+          <div class="canvas-wrap" id="wave-wrap"><canvas id="wave" aria-label="EEG 波形，拖动可选择分析区间"></canvas><div id="wave-tooltip" class="tooltip" hidden></div></div>
+          <div class="wave-navigation"><button id="pan-left" aria-label="向前平移">‹</button><input id="pan" type="range" min="0" max="1000" value="0" aria-label="时间窗口位置"><button id="pan-right" aria-label="向后平移">›</button><span id="view-range"></span></div>
+          <div class="plot-footer"><span id="selection-label">拖动波形框选分析区间 · 滚轮缩放</span><span id="sample-info"></span></div>
+        </section>
+        <section class="plot-card psd-card">
+          <div class="card-header"><div><span class="section-number">02</span><h2>功率谱密度</h2><span class="pill">WELCH</span></div><div class="plot-actions"><button id="pin">固定为对照 A</button><button id="clear-pin" hidden>移除 A</button><button id="export-csv">导出 PSD</button></div></div>
+          <div class="psd-toolbar">
+            <label>来源<select id="psd-source"><option value="segment">当前 trial / 阶段全段</option><option value="view">当前可见区间</option><option value="selection">框选区间</option></select></label>
+            <label>窗长<select id="window"><option value="2">2 s · 平滑</option><option value="4" selected>4 s · 常规</option><option value="8">8 s · 精细</option><option value="full">全分析区间 · 单窗</option></select></label>
+            <label>重叠<select id="overlap"><option value="0.5">50%</option><option value="0">0%</option><option value="0.75">75%</option></select></label>
+            <label>频率<select id="frequency-range"><option value="60">0–60 Hz</option><option value="30">0–30 Hz</option><option value="100">0–100 Hz</option><option value="target">目标 ±2 Hz</option><option value="nyquist">全频段</option></select></label>
+            <label>纵轴<select id="psd-scale"><option value="db">dB</option><option value="linear">线性</option></select></label>
+          </div>
+          <div class="canvas-wrap" id="psd-wrap"><canvas id="psd" aria-label="各通道 Welch PSD"></canvas><div id="psd-tooltip" class="tooltip" hidden></div></div>
+          <div class="plot-footer"><span id="psd-info">等待数据</span><span id="compute-status" role="status"></span></div>
+          <div id="pin-info" class="pin-info" hidden></div>
+        </section>
+        <details class="details-card"><summary>数据详情与时间轴说明<span>采样配置 · 单位 · 事件 · 采集标记</span></summary><div id="details"></div></details>
+      </div>
+    </main>
+  </div>
+  <script nonce="{{NONCE}}" src="{{APP}}"></script>
+</body>
+</html>

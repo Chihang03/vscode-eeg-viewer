@@ -1,0 +1,27 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.resolve(__dirname, '..');
+const pkg = require('../package.json');
+
+assert.equal(`${pkg.publisher}.${pkg.name}`, 'chihang03.kieran-eeg-viewer');
+assert.equal(pkg.displayName, 'Kieran EEG Viewer（脑电查看器）');
+assert.equal(pkg.author.name, 'Kieran Dai');
+assert.equal(pkg.license, 'MIT');
+assert.equal(pkg.repository.url, 'https://github.com/Chihang03/vscode-eeg-viewer.git');
+assert.equal(pkg.bugs.url, 'https://github.com/Chihang03/vscode-eeg-viewer/issues');
+assert.ok(pkg.homepage.startsWith('https://github.com/Chihang03/vscode-eeg-viewer'));
+const icon = fs.readFileSync(path.join(root, pkg.icon));
+assert.equal(icon.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+assert.ok(icon.readUInt32BE(16) >= 128 && icon.readUInt32BE(16) === icon.readUInt32BE(20));
+assert.ok(!pkg.scripts.publish);
+assert.equal(pkg.devDependencies['@vscode/vsce'], '4.0.0');
+for (const command of pkg.contributes.commands) assert.ok(command.command.startsWith('kieranEEG.'));
+for (const editor of pkg.contributes.customEditors) assert.ok(editor.viewType.startsWith('kieranEEG.'));
+const html = fs.readFileSync(path.join(root, 'media/index.html'), 'utf8');
+assert.match(html, /<title>Kieran EEG Viewer/);
+assert.match(html, /src="\{\{ICON\}\}"/);
+assert.match(html, /\{\{VERSION\}\}/);
+assert.match(fs.readFileSync(path.join(root, 'LICENSE'), 'utf8'), /Copyright \(c\) 2026 Kieran Dai/);
+console.log('PASS identity: independent extension ID, owner, URLs, PNG logo, namespaces, dynamic version and locked packaging tool');

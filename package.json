@@ -1,0 +1,121 @@
+{
+  "name": "kieran-eeg-viewer",
+  "displayName": "Kieran EEG Viewer（脑电查看器）",
+  "description": "专为 Bigshen SSVEP 与 ASSR 采集项目设计：波形、trial 导航与联动 PSD。",
+  "version": "0.1.1",
+  "publisher": "chihang03",
+  "author": {
+    "name": "Kieran Dai"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Chihang03/vscode-eeg-viewer.git"
+  },
+  "homepage": "https://github.com/Chihang03/vscode-eeg-viewer#readme",
+  "bugs": {
+    "url": "https://github.com/Chihang03/vscode-eeg-viewer/issues"
+  },
+  "icon": "assets/icon.png",
+  "galleryBanner": {
+    "color": "#11151d",
+    "theme": "dark"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization"
+  ],
+  "keywords": [
+    "EEG",
+    "SSVEP",
+    "ASSR",
+    "PSD",
+    "脑电"
+  ],
+  "main": "./src/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onCustomEditor:kieranEEG.viewer"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "kieranEEG.open",
+        "title": "EEG：打开数据（自动识别）",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "kieranEEG.openSSVEP",
+        "title": "EEG：打开 Bigshen SSVEP 数据"
+      },
+      {
+        "command": "kieranEEG.openASSR",
+        "title": "EEG：打开 ASSR 数据"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "kieranEEG.open",
+          "when": "resourceScheme == file",
+          "group": "navigation@80"
+        },
+        {
+          "command": "kieranEEG.openSSVEP",
+          "when": "explorerResourceIsFolder && resourceScheme == file",
+          "group": "navigation@81"
+        },
+        {
+          "command": "kieranEEG.openASSR",
+          "when": "explorerResourceIsFolder && resourceScheme == file",
+          "group": "navigation@82"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "kieranEEG.open",
+          "when": "resourceFilename =~ /(_eeg\\.csv|_meta\\.json|session\\.json)$/",
+          "group": "navigation"
+        }
+      ]
+    },
+    "customEditors": [
+      {
+        "viewType": "kieranEEG.viewer",
+        "displayName": "EEG 波形与 PSD",
+        "selector": [
+          {
+            "filenamePattern": "**/*_eeg.csv"
+          },
+          {
+            "filenamePattern": "**/*_meta.json"
+          },
+          {
+            "filenamePattern": "**/session.json"
+          }
+        ],
+        "priority": "option"
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "check": "node --check src/extension.js && node --check src/adapters.js && node --check media/dsp.js && node --check media/app.js && node --check media/worker.js",
+    "check:identity": "node scripts/check-identity.cjs",
+    "package": "vsce package --no-dependencies --githubBranch main",
+    "vscode:prepublish": "npm run check && npm run check:identity && npm test"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "4.0.0"
+  }
+}

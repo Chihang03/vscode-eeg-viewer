@@ -1,0 +1,31 @@
+name: 问题反馈
+description: 报告数据读取、波形、PSD 或交互问题
+title: "[Bug] "
+body:
+  - type: input
+    id: environment
+    attributes:
+      label: 环境
+      description: 插件版本、VS Code 版本、操作系统
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: 数据模式
+      options:
+        - Bigshen SSVEP
+        - ASSR
+        - 自动识别
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤与预期结果
+      description: 说明打开的文件类型、选择的 trial / 区间及信号和 PSD 参数。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 报错、截图或最小样例
+      description: 优先提供合成样例或已匿名化的信息，不要附带被试原始资料、访问凭据或本机敏感路径。

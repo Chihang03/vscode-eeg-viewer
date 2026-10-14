@@ -1,0 +1,16 @@
+name: 功能建议
+description: 改进这两个采集项目中的查看流程
+title: "[Feature] "
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: 使用场景
+      description: 当前哪一步不方便？希望如何操作？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望功能与验证方式
+      description: 说明涉及的数据模式、界面行为或计算参数。
