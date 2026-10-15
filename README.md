@@ -22,6 +22,14 @@
 
 `*_meta.json` 和 `session.json` 可通过「重新打开方式 → EEG 波形与 PSD」查看。其他 CSV 和 JSON 保持原有打开方式。
 
+如果同时安装了普通 CSV 查看器，在 VS Code 用户设置的 `workbench.editorAssociations` 对象中合并这一项：
+
+```json
+"*_eeg.csv": "kieranEEG.viewer"
+```
+
+这是完整文件名的匹配规则，不需要把所有 `*.csv` 关联到 EEG 查看器。保留原有普通 CSV 关联即可；`*_eeg.csv` 比 `*.csv` 更具体，EEG 文件使用本插件，`trials.csv`、`events.csv` 和其他 CSV 继续由原查看器处理。规则只依据文件名，不会把任意 CSV 内容判定为 EEG。已打开的文件需关闭后重新打开。
+
 插件从当前文件进入，并关联同一会话中的 trial。左侧可以筛选频率、条件和 trial，或仅查看采集标记有效的记录。
 
 两个模式提供分别的入口和浏览内容，共用图表和计算核心；不要求两个项目使用相同的数据组织方式。
