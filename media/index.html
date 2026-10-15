@@ -45,15 +45,14 @@
           <div class="plot-footer" id="selection-footer" hidden><span id="selection-label"></span></div>
         </section>
         <section class="plot-card psd-card">
-          <div class="card-header"><div><h2>PSD</h2><div id="channels" class="channels"></div></div><div class="plot-actions"><button id="pin">固定为对照 A</button><button id="clear-pin" hidden>移除 A</button><button id="export-csv">导出 PSD</button></div></div>
+          <div class="card-header"><div><h2>PSD</h2><div id="channels" class="channels"></div></div><div class="plot-actions"><button id="reset-psd" disabled>全频段</button><button id="pin">固定为对照 A</button><button id="clear-pin" hidden>移除 A</button><button id="export-csv">导出 PSD</button></div></div>
           <div class="psd-toolbar">
             <label>来源<select id="psd-source"><option value="segment">当前 trial / 阶段全段</option><option value="view">当前可见区间</option><option value="selection">框选区间</option></select></label>
             <label>窗长<select id="window"><option value="2">2 s</option><option value="4" selected>4 s</option><option value="8">8 s</option><option value="full">全段</option></select></label>
             <label>重叠<select id="overlap"><option value="0.5">50%</option><option value="0">0%</option><option value="0.75">75%</option></select></label>
-            <label>频率<select id="frequency-range"><option value="60">0–60 Hz</option><option value="30">0–30 Hz</option><option value="100">0–100 Hz</option><option value="target">目标 ±2 Hz</option><option value="nyquist">全频段</option></select></label>
             <label>纵轴<select id="psd-scale"><option value="db">dB</option><option value="linear">线性</option></select></label>
           </div>
-          <div class="canvas-wrap" id="psd-wrap"><canvas id="psd" aria-label="各通道 Welch PSD"></canvas><div id="psd-tooltip" class="tooltip" hidden></div></div>
+          <div class="canvas-wrap" id="psd-wrap"><canvas id="psd" aria-label="各通道 Welch PSD" title="滚轮缩放 · 拖动平移 · 双击恢复全频段"></canvas><div id="psd-tooltip" class="tooltip" hidden></div></div>
           <div class="plot-footer"><span id="psd-info">等待数据</span><span id="compute-status" role="status"></span></div>
           <div id="pin-info" class="pin-info" hidden></div>
         </section>

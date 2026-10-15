@@ -4,7 +4,7 @@
   const vscode = acquireVsCodeApi();
   const COLORS = ['#6eb8ac', '#7dabef', '#e2ac70', '#c19ae5', '#dc8492'];
   const state = { dataset: null, session: null, segment: null, columns: null, average: null, psd: null,
-    shown: new Set(), view: [0, 1], selection: null, pinned: null,
+    shown: new Set(), view: [0, 1], psdView: null, psdDragging: null, selection: null, pinned: null,
     request: 0, computation: 0, dragging: null, filterWarnings: [], psdError: null, mode: 'ssvep' };
   let worker, resolveWorker, rejectWorker;
   const workerReady = new Promise((resolve, reject) => { resolveWorker = resolve; rejectWorker = reject; });
@@ -147,6 +147,7 @@
     requestSegment(initialTrial || state.session.trials[0]?.id || 'continuous');
   }
   function requestSegment(id) {
+    finishPSDPan();
     state.request++; state.computation++; state.requestedId = id;
     state.segment = null; state.columns = null; state.average = null; state.psd = null; state.selection = null;
     state.filterWarnings = []; state.psdError = null;
@@ -318,16 +319,58 @@
   }
 
   function frequencyBounds() {
-    const fs = state.segment?.fs || 500, mode = $('frequency-range').value;
-    const targets = state.segment?.targets || [];
-    if (mode === 'target' && targets.length) return [Math.max(0, Math.min(...targets) - 2), Math.min(fs / 2, Math.max(...targets) + 2)];
-    return [0, mode === 'nyquist' ? fs / 2 : Math.min(fs / 2, Number(mode) || 60)];
+    const limit = (state.segment?.fs || 500) / 2;
+    const [a, b] = state.psdView || [0, Math.min(limit, 60)];
+    // 最窄显示两个实际频率间隔；放大不改变 Welch 的频率分辨率。
+    const width = Math.min(limit, Math.max(state.psd?.binHz * 2 || 0, b - a));
+    const start = Math.max(0, Math.min(limit - width, (a + b - width) / 2));
+    return [start, start + width];
+  }
+  function setPSDView(a, b) {
+    if (!state.psd?.segments || !state.segment) return;
+    state.psdView = [a, b]; state.psdView = frequencyBounds();
+    $('psd-tooltip').hidden = true; drawPSD();
+  }
+  function resetPSDView() {
+    if (state.segment) setPSDView(0, state.segment.fs / 2);
+  }
+  function psdPointer(event) {
+    const rect = $('psd').getBoundingClientRect();
+    return { x: event.clientX - rect.left, width: rect.width - 82,
+      fraction: Math.max(0, Math.min(1, (event.clientX - rect.left - 63) / (rect.width - 82))) };
+  }
+  function finishPSDPan() {
+    const drag = state.psdDragging; state.psdDragging = null;
+    $('psd').classList.remove('dragging');
+    if (drag && $('psd').hasPointerCapture(drag.pointerId)) $('psd').releasePointerCapture(drag.pointerId);
+  }
+  function visibleSpectrum(curve, minF, maxF, convert) {
+    const points = [];
+    for (let i = 0; i < curve.f.length; i++) {
+      const f = curve.f[i], y = Number.isFinite(curve.p[i]) ? convert(curve.p[i]) : NaN;
+      // 保留边界处的连线，放大后不会因相邻频点位于视口外而截断曲线。
+      if (i && curve.f[i - 1] < minF && f > minF && Number.isFinite(curve.p[i - 1]) && Number.isFinite(y)) {
+        const previous = convert(curve.p[i - 1]);
+        points.push({ f: minF, y: previous + (y - previous) * (minF - curve.f[i - 1]) / (f - curve.f[i - 1]) });
+      }
+      if (f >= minF && f <= maxF) points.push({ f, y, bin: true });
+      if (i && f > maxF) {
+        if (curve.f[i - 1] < maxF && Number.isFinite(curve.p[i - 1]) && Number.isFinite(y)) {
+          const previous = convert(curve.p[i - 1]);
+          points.push({ f: maxF, y: previous + (y - previous) * (maxF - curve.f[i - 1]) / (f - curve.f[i - 1]) });
+        }
+        break;
+      }
+    }
+    return points;
   }
   function compatiblePin() { return state.pinned && state.segment && state.pinned.unit === state.segment.unit; }
   function drawPSD() {
     const p = prepareCanvas('psd'), { ctx, left, right, top, bottom, muted, border } = p;
+    $('reset-psd').disabled = !state.psd?.segments;
     if (!state.psd?.segments || !state.segment) { canvasEmpty(p, state.psdError || (state.psd ? state.psd.warnings.join(' ') : '等待频谱计算…')); return; }
     const [minF, maxF] = frequencyBounds(), logarithmic = $('psd-scale').value === 'db', indices = shownIndices();
+    p.canvas.setAttribute('aria-label', `各通道 Welch PSD，${format(minF, 4)}–${format(maxF, 4)} Hz`);
     const convert = y => logarithmic ? 10 * Math.log10(Math.max(1e-30, y)) : y;
     const curves = indices.map(c => ({ f: state.psd.frequencies, p: state.psd.power[c], color: COLORS[c % COLORS.length], dash: [] }));
     if (compatiblePin()) for (const c of indices) {
@@ -335,16 +378,19 @@
       if (pinIndex >= 0) curves.push({ f: state.pinned.psd.frequencies, p: state.pinned.psd.power[pinIndex], color: COLORS[c % COLORS.length], dash: [5, 4] });
     }
     let minY = Infinity, maxY = -Infinity;
-    for (const curve of curves) for (let i = 0; i < curve.f.length; i++) {
-      if (curve.f[i] >= minF && curve.f[i] <= maxF && Number.isFinite(curve.p[i])) { const y = convert(curve.p[i]); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+    for (const curve of curves) {
+      curve.points = visibleSpectrum(curve, minF, maxF, convert);
+      for (const { y } of curve.points) if (Number.isFinite(y)) { minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
     }
     if (!Number.isFinite(minY)) { canvasEmpty(p, '当前频率范围内没有 PSD 频点'); return; }
     if (logarithmic) { const span = Math.max(10, maxY - minY); minY -= span * 0.08; maxY += span * 0.08; }
     else { minY = 0; maxY = maxY > 0 ? maxY * 1.1 : 1; }
     if (maxY <= minY) maxY = minY + 1;
-    const toX = f => left + (f - minF) / (maxF - minF) * (right - left), toY = y => bottom - (convert(y) - minY) / (maxY - minY) * (bottom - top);
-    for (const f of ticks(minF, maxF, Math.max(2, (right - left) / 105))) {
-      const x = toX(f); line(ctx, x, top, x, bottom, border); ctx.fillStyle = muted; ctx.textAlign = 'center'; ctx.fillText(`${format(f, maxF - minF <= 5 ? 1 : 0)} Hz`, x, bottom + 17);
+    const toX = f => left + (f - minF) / (maxF - minF) * (right - left), toY = y => bottom - (y - minY) / (maxY - minY) * (bottom - top);
+    const xTicks = ticks(minF, maxF, Math.max(2, (right - left) / 105));
+    const digits = Math.min(6, Math.max(0, Math.ceil(-Math.log10((xTicks[1] - xTicks[0]) || (maxF - minF))) + 1));
+    for (const f of xTicks) {
+      const x = toX(f); line(ctx, x, top, x, bottom, border); ctx.fillStyle = muted; ctx.textAlign = 'center'; ctx.fillText(`${format(f, digits)} Hz`, x, bottom + 17);
     }
     for (const y of ticks(minY, maxY, 4)) {
       const screen = bottom - (y - minY) / (maxY - minY) * (bottom - top); line(ctx, left, screen, right, screen, border);
@@ -365,11 +411,17 @@
     for (const curve of curves) {
       ctx.strokeStyle = curve.color; ctx.lineWidth = curve.dash.length ? 1.1 : 1.4; ctx.setLineDash(curve.dash); ctx.globalAlpha = curve.dash.length ? 0.6 : 1;
       ctx.beginPath(); let started = false;
-      for (let i = 0; i < curve.f.length; i++) {
-        if (curve.f[i] < minF || curve.f[i] > maxF || !Number.isFinite(curve.p[i])) continue;
-        const x = toX(curve.f[i]), y = toY(curve.p[i]); if (started) ctx.lineTo(x, y); else { ctx.moveTo(x, y); started = true; }
+      for (const point of curve.points) {
+        if (!Number.isFinite(point.y)) { started = false; continue; }
+        const x = toX(point.f), y = toY(point.y); if (started) ctx.lineTo(x, y); else { ctx.moveTo(x, y); started = true; }
       }
       ctx.stroke();
+      if ((curve.f[1] - curve.f[0]) / (maxF - minF) * (right - left) >= 12) {
+        ctx.fillStyle = curve.color;
+        for (const point of curve.points) if (point.bin && Number.isFinite(point.y)) {
+          ctx.beginPath(); ctx.arc(toX(point.f), toY(point.y), 2.5, 0, Math.PI * 2); ctx.fill();
+        }
+      }
     }
     ctx.restore(); ctx.setLineDash([]);
   }
@@ -420,16 +472,38 @@
     setView(pivot - (pivot - state.view[0]) * factor, pivot + (state.view[1] - pivot) * factor);
   }, { passive: false });
   $('wave').addEventListener('dblclick', () => setView(0, duration()));
+  $('psd').addEventListener('wheel', event => {
+    if (!state.psd?.segments || !state.segment || !event.deltaY) return;
+    event.preventDefault(); finishPSDPan();
+    const [a, b] = frequencyBounds(), { fraction } = psdPointer(event);
+    const pivot = a + fraction * (b - a), factor = event.deltaY > 0 ? 1.3 : 1 / 1.3;
+    const width = Math.min(state.segment.fs / 2, Math.max(state.psd.binHz * 2, (b - a) * factor));
+    setPSDView(pivot - fraction * width, pivot + (1 - fraction) * width);
+  }, { passive: false });
+  $('psd').addEventListener('pointerdown', event => {
+    if (!state.psd?.segments || !state.segment || event.button !== 0) return;
+    const { x, width } = psdPointer(event);
+    if (x < 63 || x > 63 + width) return;
+    state.psdDragging = { x, width, view: frequencyBounds(), pointerId: event.pointerId };
+    $('psd').setPointerCapture(event.pointerId); $('psd').classList.add('dragging'); $('psd-tooltip').hidden = true;
+  });
   $('psd').addEventListener('pointermove', event => {
     if (!state.psd?.segments || !state.segment) return;
-    const rect = $('psd').getBoundingClientRect(), [a, b] = frequencyBounds(), x = event.clientX - rect.left;
-    const f = a + Math.max(0, Math.min(1, (x - 63) / (rect.width - 82))) * (b - a);
+    if (state.psdDragging) {
+      const { x, width, view: [a, b] } = state.psdDragging;
+      const delta = (x - psdPointer(event).x) / width * (b - a);
+      setPSDView(a + delta, b + delta); return;
+    }
+    const [a, b] = frequencyBounds(), f = a + psdPointer(event).fraction * (b - a);
     const i = Math.max(0, Math.min(state.psd.frequencies.length - 1, Math.round(f / state.psd.binHz)));
     const logarithmic = $('psd-scale').value === 'db', unit = state.segment.unit === 'μV' ? 'μV²/Hz' : `${state.segment.unit}²/Hz`;
     tooltip('psd-tooltip', event, [`${format(state.psd.frequencies[i], 4)} Hz`, ...shownIndices().map(c => {
       const value = state.psd.power[c][i]; return `${state.segment.channels[c]}  ${logarithmic ? format(10 * Math.log10(Math.max(1e-30, value)), 2) + ' dB' : value.toExponential(4) + ' ' + unit}`;
     })].join('\n'));
   });
+  for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) $('psd').addEventListener(event, finishPSDPan);
+  $('psd').addEventListener('dblclick', resetPSDView);
+  $('reset-psd').addEventListener('click', resetPSDView);
   $('psd').addEventListener('pointerleave', () => { $('psd-tooltip').hidden = true; });
 
   $('profile').addEventListener('change', () => { state.mode = $('profile').value; vscode.postMessage({ type: 'profile', profile: state.mode }); });
@@ -452,7 +526,7 @@
     drawWave();
   });
   for (const id of ['psd-source', 'window', 'overlap']) $(id).addEventListener('change', () => calculate());
-  for (const id of ['frequency-range', 'psd-scale']) $(id).addEventListener('change', drawPSD);
+  $('psd-scale').addEventListener('change', drawPSD);
   $('zoom-in').addEventListener('click', () => { const [a, b] = state.view; setView(a + (b - a) / 4, b - (b - a) / 4); });
   $('zoom-out').addEventListener('click', () => { const [a, b] = state.view; setView(a - (b - a) / 2, b + (b - a) / 2); });
   $('reset-view').addEventListener('click', () => setView(0, duration()));

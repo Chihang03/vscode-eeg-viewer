@@ -71,7 +71,8 @@ h1 { font-size: 24px; font-weight: 550; line-height: 1.4; margin: 6px 0 3px; let
 canvas { width: 100%; display: block; }
 #wave { height: 150px; cursor: crosshair; touch-action: none; }
 #wave-wrap[data-view="channels"] #wave { height: 240px; }
-#psd { height: 245px; cursor: crosshair; }
+#psd { height: 245px; cursor: grab; touch-action: none; }
+#psd.dragging { cursor: grabbing; }
 .wave-navigation { display: flex; align-items: center; gap: 8px; margin: 0 17px 8px 58px; }
 .wave-navigation input { flex: 1; min-width: 30px; height: 12px; }
 .wave-navigation button { font-size: 13px; padding: 0 5px; }
