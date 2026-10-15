@@ -15,6 +15,9 @@ input[type=search] { width: 100%; padding: 7px 9px; }
 [hidden] { display: none !important; }
 .app { min-height: 100vh; display: grid; grid-template-columns: 245px minmax(0, 1fr); }
 .sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; background: var(--surface); border-right: 1px solid var(--border); min-width: 0; }
+.sidebar-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.sidebar-toggle { padding: 0; width: 28px; height: 28px; flex-shrink: 0; font-size: 23px; line-height: 1; background: transparent; }
+.app.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); }
 .brand { display: flex; gap: 9px; align-items: center; padding: 17px 15px; }
 .brand-mark { width: 33px; height: 33px; object-fit: contain; flex-shrink: 0; }
 .brand > div { min-width: 0; }
@@ -44,6 +47,7 @@ input[type=search] { width: 100%; padding: 7px 9px; }
 .group-heading { margin: 12px 7px 5px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
 main { min-width: 0; padding: 18px 24px; max-width: 1920px; width: 100%; margin: 0 auto; }
 .page-header { display: flex; justify-content: space-between; gap: 20px; align-items: center; margin-bottom: 15px; }
+.page-heading { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 .eyebrow { font-size: 10px; letter-spacing: 1.8px; font-weight: 600; color: var(--accent); }
 h1 { font-size: 24px; font-weight: 550; line-height: 1.4; margin: 6px 0 3px; letter-spacing: -.4px; }
 .muted { color: var(--muted); }

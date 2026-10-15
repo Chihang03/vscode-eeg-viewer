@@ -18,6 +18,8 @@ npm run package
 
 在 VS Code 中打开项目根目录，按 F5 启动扩展开发宿主。修改 Webview 后，应实际检查打开记录、切换 trial、拖动框选、缩放、PSD 参数和导出路径；构建成功不替代界面验证。
 
+修改默认编辑器关联时，在全新的隔离宿主中同时加载本插件和普通 CSV 查看器，并以 `scripts/editor-association-smoke.cjs` 为 `--extensionTestsPath` 运行。脚本生成合成文件，检查无需手动配置的 EEG 默认打开、普通 CSV 共存、宽泛 CSV 规则及用户／工作区明确选择的优先级，并确认插件没有改写设置。默认对照插件为 Kieran Document Studio；可通过 `EEG_CSV_EXTENSION_ID` 和 `EEG_CSV_VIEW_TYPE` 指定其他 CSV 插件。该脚本会关闭测试宿主的编辑器，只应在隔离宿主运行。
+
 ## 数据和数值约定
 
 - 采样率、单位、换算系数和目标频率来自元数据。

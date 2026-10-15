@@ -8,24 +8,26 @@
   <link rel="stylesheet" href="{{STYLE}}">
 </head>
 <body data-worker="{{WORKER}}" data-dsp="{{DSP}}">
-  <div class="app">
-    <aside class="sidebar">
-      <div class="brand"><img class="brand-mark" src="{{ICON}}" alt="Kieran EEG Viewer Logo"><strong>Kieran EEG Viewer</strong><span class="version">{{VERSION}}</span></div>
-      <div class="source-controls">
-        <label for="profile">数据模式</label>
-        <div class="mode-row"><select id="profile"><option value="ssvep">SSVEP</option><option value="assr">ASSR</option></select><button id="refresh" title="刷新" aria-label="刷新">↻</button></div>
-      </div>
-      <div class="explorer-heading"><span>实验记录</span><span id="record-count" class="count">0</span></div>
-      <div id="session-list" class="session-list"></div>
-      <div class="trial-browser" hidden>
-        <label for="search" class="sr-only">筛选条件或 trial</label><input id="search" type="search" placeholder="筛选频率、条件或 trial…">
-        <label class="checkbox muted"><input id="valid-only" type="checkbox">仅显示采集标记有效</label>
-        <div id="trial-list" class="trial-list" role="list" aria-label="实验区间"></div>
+  <div class="app sidebar-collapsed">
+    <aside id="sidebar" class="sidebar" hidden>
+      <div id="sidebar-content" class="sidebar-content">
+        <div class="brand"><img class="brand-mark" src="{{ICON}}" alt="Kieran EEG Viewer Logo"><strong>Kieran EEG Viewer</strong><span class="version">{{VERSION}}</span></div>
+        <div class="source-controls">
+          <label for="profile">数据模式</label>
+          <div class="mode-row"><select id="profile"><option value="ssvep">SSVEP</option><option value="assr">ASSR</option></select><button id="refresh" title="刷新" aria-label="刷新">↻</button></div>
+        </div>
+        <div class="explorer-heading"><span>实验记录</span><span id="record-count" class="count">0</span></div>
+        <div id="session-list" class="session-list"></div>
+        <div class="trial-browser" hidden>
+          <label for="search" class="sr-only">筛选条件或 trial</label><input id="search" type="search" placeholder="筛选频率、条件或 trial…">
+          <label class="checkbox muted"><input id="valid-only" type="checkbox">仅显示采集标记有效</label>
+          <div id="trial-list" class="trial-list" role="list" aria-label="实验区间"></div>
+        </div>
       </div>
     </aside>
     <main>
       <header class="page-header">
-        <div><div class="eyebrow" id="breadcrumb"></div><h1 id="record-title">EEG</h1><div id="record-subtitle" class="muted"></div></div>
+        <div class="page-heading"><button id="toggle-sidebar" class="sidebar-toggle" aria-label="展开侧栏" title="展开侧栏" aria-expanded="false" aria-controls="sidebar">›</button><div><div class="eyebrow" id="breadcrumb"></div><h1 id="record-title">EEG</h1><div id="record-subtitle" class="muted"></div></div></div>
         <div class="header-actions"><button id="previous" disabled aria-label="上一个 trial" title="上一个 trial（Alt + ←）">←</button><button id="next" disabled aria-label="下一个 trial" title="下一个 trial（Alt + →）">→</button><button id="export-png" disabled>导出图像</button></div>
       </header>
       <div id="notice" class="notice" role="status" hidden></div>
@@ -56,7 +58,7 @@
           <div class="plot-footer"><span id="psd-info">等待数据</span><span id="compute-status" role="status"></span></div>
           <div id="pin-info" class="pin-info" hidden></div>
         </section>
-        <details class="details-card"><summary>详情</summary><div id="details"></div></details>
+        <details class="details-card" open><summary>详情</summary><div id="details"></div></details>
       </div>
     </main>
   </div>

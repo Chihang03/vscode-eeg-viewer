@@ -506,6 +506,15 @@
   $('reset-psd').addEventListener('click', resetPSDView);
   $('psd').addEventListener('pointerleave', () => { $('psd-tooltip').hidden = true; });
 
+  $('toggle-sidebar').addEventListener('click', () => {
+    const collapsed = document.querySelector('.app').classList.toggle('sidebar-collapsed');
+    $('sidebar').hidden = collapsed;
+    const button = $('toggle-sidebar');
+    button.setAttribute('aria-expanded', String(!collapsed));
+    button.setAttribute('aria-label', collapsed ? '展开侧栏' : '收起侧栏');
+    button.title = collapsed ? '展开侧栏' : '收起侧栏';
+    button.textContent = collapsed ? '›' : '‹';
+  });
   $('profile').addEventListener('change', () => { state.mode = $('profile').value; vscode.postMessage({ type: 'profile', profile: state.mode }); });
   $('refresh').addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
   $('search').addEventListener('input', renderTrials); $('valid-only').addEventListener('change', renderTrials);
