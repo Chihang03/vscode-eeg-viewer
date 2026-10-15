@@ -1,8 +1,8 @@
 {
   "name": "kieran-eeg-viewer",
   "displayName": "Kieran EEG Viewer（脑电查看器）",
-  "description": "专为 Bigshen SSVEP 与 ASSR 采集项目设计：波形、trial 导航与联动 PSD。",
-  "version": "0.1.1",
+  "description": "SSVEP 与 ASSR 脑电波形、trial 导航与联动 PSD。",
+  "version": "0.1.2",
   "publisher": "chihang03",
   "author": {
     "name": "Kieran Dai"
@@ -39,7 +39,8 @@
     "workspace"
   ],
   "activationEvents": [
-    "onCustomEditor:kieranEEG.viewer"
+    "onCustomEditor:kieranEEG.viewer",
+    "onCustomEditor:kieranEEG.metadataViewer"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -51,40 +52,30 @@
     "commands": [
       {
         "command": "kieranEEG.open",
-        "title": "EEG：打开数据（自动识别）",
+        "title": "EEG：查看波形与 PSD",
         "icon": "$(pulse)"
       },
       {
         "command": "kieranEEG.openSSVEP",
-        "title": "EEG：打开 Bigshen SSVEP 数据"
+        "title": "EEG：以 SSVEP 查看"
       },
       {
         "command": "kieranEEG.openASSR",
-        "title": "EEG：打开 ASSR 数据"
+        "title": "EEG：以 ASSR 查看"
       }
     ],
     "menus": {
       "explorer/context": [
         {
           "command": "kieranEEG.open",
-          "when": "resourceScheme == file",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resourceFilename =~ /(_eeg\\.csv|_meta\\.json|_events\\.csv|session\\.json|trials\\.csv|events\\.csv)$/",
           "group": "navigation@80"
-        },
-        {
-          "command": "kieranEEG.openSSVEP",
-          "when": "explorerResourceIsFolder && resourceScheme == file",
-          "group": "navigation@81"
-        },
-        {
-          "command": "kieranEEG.openASSR",
-          "when": "explorerResourceIsFolder && resourceScheme == file",
-          "group": "navigation@82"
         }
       ],
       "editor/title": [
         {
           "command": "kieranEEG.open",
-          "when": "resourceFilename =~ /(_eeg\\.csv|_meta\\.json|session\\.json)$/",
+          "when": "resourceFilename =~ /(_eeg\\.csv|_meta\\.json|_events\\.csv|session\\.json|trials\\.csv|events\\.csv)$/",
           "group": "navigation"
         }
       ]
@@ -96,7 +87,14 @@
         "selector": [
           {
             "filenamePattern": "**/*_eeg.csv"
-          },
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "kieranEEG.metadataViewer",
+        "displayName": "EEG 波形与 PSD",
+        "selector": [
           {
             "filenamePattern": "**/*_meta.json"
           },

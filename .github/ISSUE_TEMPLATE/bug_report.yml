@@ -14,9 +14,8 @@ body:
     attributes:
       label: 数据模式
       options:
-        - Bigshen SSVEP
+        - SSVEP
         - ASSR
-        - 自动识别
   - type: textarea
     id: steps
     attributes:

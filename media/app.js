@@ -3,9 +3,9 @@
   const $ = id => document.getElementById(id);
   const vscode = acquireVsCodeApi();
   const COLORS = ['#6eb8ac', '#7dabef', '#e2ac70', '#c19ae5', '#dc8492'];
-  const state = { dataset: null, session: null, segment: null, columns: null, psd: null,
+  const state = { dataset: null, session: null, segment: null, columns: null, average: null, psd: null,
     shown: new Set(), view: [0, 1], selection: null, pinned: null,
-    request: 0, computation: 0, dragging: null, filterWarnings: [], psdError: null, mode: 'auto' };
+    request: 0, computation: 0, dragging: null, filterWarnings: [], psdError: null, mode: 'ssvep' };
   let worker, resolveWorker, rejectWorker;
   const workerReady = new Promise((resolve, reject) => { resolveWorker = resolve; rejectWorker = reject; });
   // ready 的拒绝在 calculate 中呈现，避免初始化失败成为未处理的 Promise。
@@ -53,11 +53,11 @@
         if (message.type === 'error' && message.id === 0) { rejectWorker(new Error(message.message)); return; }
         if (message.id !== state.computation) return;
         if (message.type === 'error') { computationError(message.message); return; }
-        state.psd = message.psd; state.columns = message.columns || state.columns; state.psdError = null;
+        state.psd = message.psd; state.columns = message.columns; state.average = message.average; state.psdError = null;
         state.filterWarnings = message.warnings || [];
-        text('compute-status', '本地计算完成');
+        $('workspace').dataset.state = 'ready'; text('compute-status', '');
         const p = state.psd, start = p.start / state.segment.fs, end = p.end / state.segment.fs;
-        text('psd-info', `${format(start, 3)}–${format(end, 3)} s · Hann ${format(p.windowSeconds, 3)} s · Δf ${format(p.binHz, 4)} Hz · ${p.segments} 段平均 · ${p.finiteSamples.toLocaleString()} 有效样本`);
+        text('psd-info', `${format(start, 3)}–${format(end, 3)} s · Δf ${format(p.binHz, 4)} Hz · ${p.segments} 窗`);
         $('export-png').disabled = !state.columns; $('export-csv').disabled = !p.segments; $('pin').disabled = !p.segments;
         drawWave(); drawPSD(); updateWarnings();
       };
@@ -66,7 +66,8 @@
   }
 
   function computationError(message) {
-    state.psd = null; state.columns = null; state.psdError = message;
+    state.psd = null; state.columns = null; state.average = null; state.psdError = message;
+    $('workspace').dataset.state = 'error';
     $('export-png').disabled = true; $('export-csv').disabled = true; $('pin').disabled = true;
     text('compute-status', '计算未完成'); text('psd-info', message); notice(message, true); drawWave(); drawPSD();
   }
@@ -75,6 +76,7 @@
     if (!state.segment) return;
     const id = ++state.computation, segment = state.segment;
     state.psd = null; $('export-csv').disabled = true; $('pin').disabled = true;
+    $('workspace').dataset.state = 'computing';
     text('compute-status', '计算中…');
     try {
       const options = analysisOptions(), settings = config();
@@ -140,17 +142,18 @@
 
   function selectSession(id, initialTrial) {
     state.session = state.dataset.sessions.find(s => s.id === id) || state.dataset.sessions[0];
+    state.mode = state.session.profile; $('profile').value = state.mode;
     $('search').value = ''; renderSessions();
     requestSegment(initialTrial || state.session.trials[0]?.id || 'continuous');
   }
   function requestSegment(id) {
     state.request++; state.computation++; state.requestedId = id;
-    state.segment = null; state.columns = null; state.psd = null; state.selection = null;
+    state.segment = null; state.columns = null; state.average = null; state.psd = null; state.selection = null;
     state.filterWarnings = []; state.psdError = null;
-    $('welcome').hidden = true; $('workspace').hidden = false;
+    $('workspace').hidden = false; $('workspace').dataset.state = 'loading';
     text('record-title', '正在读取 EEG…'); text('record-subtitle', state.session.label);
     text('breadcrumb', `${state.session.subject || ''} / ${state.session.profile.toUpperCase()}`);
-    text('compute-status', '读取中…'); text('psd-info', '等待数据'); text('sample-info', ''); text('selection-label', '正在读取…');
+    text('compute-status', '读取中…'); text('psd-info', ''); text('selection-label', ''); $('selection-footer').hidden = true;
     for (const id of ['export-png', 'export-csv', 'pin', 'zoom-selection', 'clear-selection']) $(id).disabled = true;
     $('channels').replaceChildren(); $('details').replaceChildren();
     renderTrials(); drawWave(); drawPSD();
@@ -215,9 +218,9 @@
     text('view-range', `${format(a)}–${format(b)} s`);
     $('pan').value = b - a >= total ? '0' : String(Math.round(a / (total - (b - a)) * 1000));
     $('pan').disabled = b - a >= total;
-    text('sample-info', `${state.segment.fs} Hz · ${state.segment.channels.length} 通道 · ${processingLabel()}`);
     const selection = state.selection;
-    text('selection-label', selection ? `选区 ${format(selection[0], 3)}–${format(selection[1], 3)} s · ${format(selection[1] - selection[0], 3)} s` : '拖动波形框选分析区间 · 滚轮缩放');
+    $('selection-footer').hidden = !selection;
+    text('selection-label', selection ? `${format(selection[0], 3)}–${format(selection[1], 3)} s` : '');
     $('zoom-selection').disabled = !selection; $('clear-selection').disabled = !selection;
     drawWave();
   }
@@ -254,7 +257,7 @@
 
   function drawWave() {
     const p = prepareCanvas('wave'), { ctx, left, right, top, bottom, muted, border } = p;
-    if (!state.columns || !state.segment) { canvasEmpty(p, state.psdError || (state.session ? '正在读取信号…' : '打开采集记录')); return; }
+    if (!state.columns || !state.average || !state.segment) { canvasEmpty(p, state.psdError || ''); return; }
     const [a, b] = state.view, fs = state.segment.fs, width = right - left;
     const toX = t => left + (t - a) / (b - a) * width;
     for (const region of state.segment.regions) {
@@ -266,11 +269,14 @@
     for (const t of ticks(a, b, Math.max(2, width / 120))) {
       const x = toX(t); line(ctx, x, top, x, bottom, border); ctx.fillStyle = muted; ctx.textAlign = 'center'; ctx.fillText(`${format(t, b - a < 1 ? 2 : 1)} s`, x, bottom + 17);
     }
-    const indices = shownIndices(), lane = (bottom - top) / indices.length;
+    const rows = $('wave-mode').value === 'average'
+      ? [{ values: state.average, label: '平均', color: COLORS[0] }]
+      : shownIndices().map(c => ({ values: state.columns[c], label: state.segment.channels[c], color: COLORS[c % COLORS.length] }));
+    const lane = (bottom - top) / rows.length;
     const first = Math.max(0, Math.floor(a * fs)), end = Math.min(state.segment.sampleCount, Math.ceil(b * fs));
     const stride = Math.max(1, Math.ceil((end - first) / width));
-    indices.forEach((c, j) => {
-      const values = state.columns[c], mid = top + lane * (j + 0.5), color = COLORS[c % COLORS.length];
+    rows.forEach(({ values, label, color }, j) => {
+      const mid = top + lane * (j + 0.5);
       let center = 0, count = 0;
       if ($('center-wave').checked) { for (let i = first; i < end; i++) if (Number.isFinite(values[i])) { center += values[i]; count++; } center = count ? center / count : 0; }
       let limit = Number($('amplitude').value);
@@ -279,7 +285,7 @@
       }
       const scale = (lane / 2 - 15) / limit;
       line(ctx, left, mid, right, mid, border, [2, 4]);
-      ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.fillText(state.segment.channels[c], 10, mid - 5);
+      ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.fillText(label, 10, mid - 5);
       ctx.fillStyle = muted; ctx.font = '9px -apple-system, sans-serif'; ctx.fillText(`±${limit >= 10 ? Math.round(limit) : format(limit, 1)}`, 10, mid + 11); ctx.font = '10px -apple-system, sans-serif';
       ctx.save(); ctx.beginPath(); ctx.rect(left, top + j * lane, width, lane); ctx.clip(); ctx.strokeStyle = color; ctx.lineWidth = 1.1;
       ctx.beginPath(); let connected = false;
@@ -394,8 +400,10 @@
     const t = canvasTime(event);
     if (state.dragging) { state.selection = [Math.min(state.dragging.t, t), Math.max(state.dragging.t, t)]; updateView(); return; }
     const index = Math.max(0, Math.min(state.segment.sampleCount - 1, Math.round(t * state.segment.fs)));
-    tooltip('wave-tooltip', event, [`${format(index / state.segment.fs, 3)} s · #${index + state.segment.startIndex}`,
-      ...shownIndices().map(c => `${state.segment.channels[c]}  ${format(state.columns[c][index], 3)} ${state.segment.unit}`)].join('\n'));
+    const values = $('wave-mode').value === 'average'
+      ? [`平均  ${format(state.average[index], 3)} ${state.segment.unit}`]
+      : shownIndices().map(c => `${state.segment.channels[c]}  ${format(state.columns[c][index], 3)} ${state.segment.unit}`);
+    tooltip('wave-tooltip', event, [`${format(index / state.segment.fs, 3)} s`, ...values].join('\n'));
   });
   function finishSelection(event) {
     if (!state.dragging) return;
@@ -424,10 +432,6 @@
   });
   $('psd').addEventListener('pointerleave', () => { $('psd-tooltip').hidden = true; });
 
-  function open(profile) { state.mode = profile; $('profile').value = profile; vscode.postMessage({ type: 'open', profile }); }
-  $('open').addEventListener('click', () => open($('profile').value));
-  $('welcome-open').addEventListener('click', () => open('auto'));
-  document.querySelectorAll('[data-open-profile]').forEach(button => button.addEventListener('click', () => open(button.dataset.openProfile)));
   $('profile').addEventListener('change', () => { state.mode = $('profile').value; vscode.postMessage({ type: 'profile', profile: state.mode }); });
   $('refresh').addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
   $('search').addEventListener('input', renderTrials); $('valid-only').addEventListener('change', renderTrials);
@@ -442,6 +446,11 @@
     state.columns = null; updateView(); calculate();
   });
   for (const id of ['center-wave', 'amplitude']) $(id).addEventListener('change', drawWave);
+  $('wave-mode').addEventListener('change', () => {
+    $('wave-wrap').dataset.view = $('wave-mode').value;
+    $('wave-tooltip').hidden = true;
+    drawWave();
+  });
   for (const id of ['psd-source', 'window', 'overlap']) $(id).addEventListener('change', () => calculate());
   for (const id of ['frequency-range', 'psd-scale']) $(id).addEventListener('change', drawPSD);
   $('zoom-in').addEventListener('click', () => { const [a, b] = state.view; setView(a + (b - a) / 4, b - (b - a) / 4); });
@@ -484,7 +493,8 @@
     const ctx = output.getContext('2d'); ctx.fillStyle = getComputedStyle(document.body).backgroundColor; ctx.fillRect(0, 0, output.width, output.height);
     ctx.fillStyle = getComputedStyle(document.body).color; ctx.font = `${16 * ratio}px sans-serif`;
     ctx.fillText(`${state.segment.sessionLabel} / ${state.segment.label}`, padding, 30 * ratio);
-    ctx.font = `${10 * ratio}px sans-serif`; ctx.fillText(`EEG (${state.segment.unit}) · ${processingLabel()} · 样本时间轴 i/fs`, padding, 52 * ratio);
+    const waveLabel = $('wave-mode').value === 'average' ? '三通道平均 (1:1:1)' : '分别显示';
+    ctx.font = `${10 * ratio}px sans-serif`; ctx.fillText(`EEG (${state.segment.unit}) · ${waveLabel} · ${processingLabel()}`, padding, 52 * ratio);
     ctx.drawImage(wave, padding, 65 * ratio); ctx.drawImage(psd, padding, wave.height + 95 * ratio);
     ctx.fillText($('psd-info').textContent, padding, output.height - 28 * ratio);
     ctx.fillText(`PSD ${$('psd-scale').value === 'db' ? 'dB' : '线性'} · ${$('psd-source').selectedOptions[0].textContent}${state.pinned ? ` · 虚线 A: ${state.pinned.label}` : ''}`, padding, output.height - 12 * ratio);
@@ -496,15 +506,12 @@
       state.dataset = message.data; state.mode = message.data.profile; $('profile').value = state.mode;
       selectSession(message.data.initialSession, message.data.initialTrial);
     } else if (message.type === 'segment' && message.requestId === state.request) acceptSegment(message.data);
-    else if (message.type === 'loading') { state.request++; state.computation++; notice(message.message); }
+    else if (message.type === 'loading') { state.request++; state.computation++; $('workspace').dataset.state = 'loading'; notice(''); }
     else if (message.type === 'error') {
       if (message.scope === 'segment' && message.requestId !== state.request) return;
-      if (message.scope === 'segment') { state.segment = null; state.columns = null; state.psd = null; state.psdError = message.message; text('record-title', '当前区间无法读取'); drawWave(); drawPSD(); }
-      else if (state.dataset) $('profile').value = state.dataset.profile;
+      if (message.scope === 'segment') { state.segment = null; state.columns = null; state.average = null; state.psd = null; state.psdError = message.message; text('record-title', '当前区间无法读取'); drawWave(); drawPSD(); }
+      else if (state.session) { state.mode = state.session.profile; $('profile').value = state.mode; }
       notice(message.message, true);
-    } else if (['welcome', 'idle'].includes(message.type)) {
-      if (message.profile) { state.mode = message.profile; $('profile').value = message.profile; }
-      updateWarnings();
     }
   });
   const observer = new ResizeObserver(() => { drawWave(); drawPSD(); }); observer.observe($('wave-wrap')); observer.observe($('psd-wrap'));

@@ -41,12 +41,15 @@ test('采样率和单位来自元数据，不把未知单位误标成微伏', ()
   assert.deepEqual(targetFrequencies({ condition: 'PURE1000' }), []);
 });
 
-test('自动识别两种项目；显式模式仅显示对应会话', async t => {
+test('按文件结构区分两种项目；显式模式仅显示对应会话', async t => {
   const { root, prefix } = await fixture(t);
   const data = await discover(root); assert.equal(data.sessions.length, 2);
   assert.equal((await discover(root, 'ssvep')).sessions.length, 1);
   assert.equal((await discover(root, 'assr')).sessions.length, 1);
   const selected = await discover(prefix + '_eeg.csv'); assert.equal(selected.initialTrial, prefix + '_meta.json');
+  assert.equal(publicDataset(selected).profile, 'ssvep');
+  const assr = data.sessions.find(s => s.profile === 'assr');
+  assert.equal(publicDataset(await discover(assr.eegFile)).profile, 'assr');
   assert.ok(!JSON.stringify(publicDataset(data)).includes('device_to_uv_scale'));
 });
 

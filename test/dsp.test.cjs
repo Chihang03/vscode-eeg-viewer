@@ -3,6 +3,22 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const dsp = require('../media/dsp');
 
+test('三通道平均采用 1:1:1，通道缺失不改变分母', () => {
+  const columns = [[1, 3, 6, 9], [2, 6, null, 12], [3, 9, 12, 15]];
+  const result = dsp.weightedAverage(columns);
+  assert.equal(result[0], 2); assert.equal(result[1], 6); assert.equal(result[3], 12);
+  assert.ok(Number.isNaN(result[2]));
+  assert.deepEqual(columns[0], [1, 3, 6, 9]);
+});
+
+test('权重归一化、零权重和错误输入有明确规则', () => {
+  assert.deepEqual(Array.from(dsp.weightedAverage([[2, 4], [8, 10], [14, 16]], [1, 2, 1])), [8, 10]);
+  assert.deepEqual(Array.from(dsp.weightedAverage([[2, 4], [null, NaN]], [1, 0])), [2, 4]);
+  assert.throws(() => dsp.weightedAverage([[1], [2]], [0, 0]), /总和/);
+  assert.throws(() => dsp.weightedAverage([[1], [2]], [-1, 2]), /非负/);
+  assert.throws(() => dsp.weightedAverage([[1], [2, 3]]), /数量/);
+});
+
 test('任意长度 FFT 与直接 DFT 一致（奇数、偶数、2 的幂）', () => {
   for (const n of [1, 7, 8, 17, 100, 511]) {
     const values = Array.from({ length: n }, (_, i) => Math.sin(i * 0.37) + i * 0.001);

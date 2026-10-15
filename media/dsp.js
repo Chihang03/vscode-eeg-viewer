@@ -182,5 +182,26 @@
     return { columns: converted, warnings };
   }
 
-  return { fftReal, welch, finiteSpans, butter2, notch, sosFiltFilt, process };
+  function weightedAverage(columns, weights = columns.map(() => 1)) {
+    if (!columns.length || weights.length !== columns.length || columns.some(c => c.length !== columns[0].length)) {
+      throw new Error('平均波形的通道或权重数量无效');
+    }
+    if (weights.some(w => !Number.isFinite(w) || w < 0)) throw new Error('波形权重必须为非负有限数');
+    const total = weights.reduce((sum, w) => sum + w, 0);
+    if (!(total > 0) || !Number.isFinite(total)) throw new Error('波形权重总和必须为正数');
+    const output = new Float64Array(columns[0].length);
+    for (let i = 0; i < output.length; i++) {
+      let value = 0;
+      for (let c = 0; c < columns.length; c++) {
+        if (!weights[c]) continue;
+        const sample = columns[c][i];
+        if (sample === null || !Number.isFinite(sample)) { value = NaN; break; }
+        value += sample * (weights[c] / total);
+      }
+      output[i] = value;
+    }
+    return output;
+  }
+
+  return { fftReal, welch, finiteSpans, butter2, notch, sosFiltFilt, process, weightedAverage };
 });

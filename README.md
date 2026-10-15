@@ -10,27 +10,25 @@
 
 由 **Kieran Dai（GitHub：Chihang03；扩展发布者：chihang03）** 独立维护。扩展 ID：`chihang03.kieran-eeg-viewer`。这是一款针对现有采集输出开发的独立工具，不代表采集设备厂商、Microsoft 或第三方机构。
 
-专为 **Bigshen SSVEP** 和 **ASSR** 两个 EEG 采集项目制作的 VS Code 插件。打开现有输出目录，即可查看多通道波形和联动的 Welch PSD。计算在本机完成，安装后无需 Python、服务端或额外运行依赖。
+用于在 VS Code 中查看 **SSVEP** 和 **ASSR** 的 EEG 波形与 Welch PSD。默认显示三通道平均波形，可切换为分别显示。安装后无需 Python、服务端或额外运行依赖。
 
 从 [GitHub Releases](https://github.com/Chihang03/vscode-eeg-viewer/releases) 下载 `.vsix` 和 `SHA256SUMS.txt`。使用反馈和功能建议请提交到 [Issues](https://github.com/Chihang03/vscode-eeg-viewer/issues)。版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
-## 打开数据
+## 查看文件
 
-安装 VSIX 后，在命令面板中选择以下任一命令：
+安装 VSIX 后，直接打开 `*_eeg.csv`，插件会读取同目录的元数据和事件。也可右键 EEG 文件选择 **EEG：查看波形与 PSD**，或对当前文件使用同名命令。
 
-- **EEG：打开数据（自动识别）**
-- **EEG：打开 Bigshen SSVEP 数据**
-- **EEG：打开 ASSR 数据**
+模式选择仅显示 **SSVEP** 和 **ASSR**，初始值由当前文件结构确定。需要手动指定时，可使用模式下拉框或 **EEG：以 SSVEP 查看** / **EEG：以 ASSR 查看** 命令。
 
-也可以右键资源管理器中的文件或目录，选择 EEG 打开命令。对 `*_eeg.csv`、`*_meta.json` 或 `session.json`，还可以使用「重新打开方式 → EEG 波形与 PSD」。插件不会默认接管普通 CSV。
+`*_meta.json` 和 `session.json` 可通过「重新打开方式 → EEG 波形与 PSD」查看。其他 CSV 和 JSON 保持原有打开方式。
 
-打开上层采集目录可以浏览多个会话；打开单个 EEG 文件则自动选择对应 trial。左侧可以筛选频率、条件和 trial，或仅查看采集标记有效的记录。
+插件从当前文件进入，并关联同一会话中的 trial。左侧可以筛选频率、条件和 trial，或仅查看采集标记有效的记录。
 
 两个模式提供分别的入口和浏览内容，共用图表和计算核心；不要求两个项目使用相同的数据组织方式。
 
 ## 支持的项目输出
 
-### Bigshen SSVEP
+### SSVEP
 
 ```text
 bigshen_eeg_collection/
@@ -61,7 +59,9 @@ trial 使用 `trials.csv` 的零基半开区间 `[eeg_start_index, eeg_end_index
 
 ## 波形操作
 
-- 逐通道显示或隐藏，至少保留一个通道。
+- 波形默认是三通道等权平均：`(FP1 + FP2 + FPz) / 3`，采用较小的图高。任一通道缺失的样本保留为空缺，不临时改为其他通道平均。
+- 选择「分别显示」可查看独立通道，切回「三通道平均」恢复紧凑视图。
+- PSD 保留各通道的频谱，通道开关也控制分别显示时的波形；隐藏某个通道不改变三通道平均的定义。
 - 拖动波形：框选区间，并切换 PSD 到选区。
 - 滚轮：以指针为中心缩放时间轴；双击：恢复全段。
 - 工具栏支持放大选区、恢复全段、清除选区；底部滑块及左右按钮用于平移。

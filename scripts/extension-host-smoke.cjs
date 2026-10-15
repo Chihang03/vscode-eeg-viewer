@@ -20,10 +20,10 @@ async function run() {
   assert.ok(extension.isActive);
   const commands = await vscode.commands.getCommands(true);
   for (const name of ['open', 'openSSVEP', 'openASSR']) assert.ok(commands.includes(`kieranEEG.${name}`));
-  await vscode.commands.executeCommand('kieranEEG.open');
-  await waitForTab(tab => tab.label.includes('EEG'));
-  console.log('EEG_HOST_PASS: activation, three commands, Webview panel');
   if (process.env.EEG_SMOKE_FILE) {
+    await vscode.commands.executeCommand('kieranEEG.open', vscode.Uri.file(process.env.EEG_SMOKE_FILE));
+    await waitForTab(tab => tab.label.includes('EEG'));
+    console.log('EEG_HOST_PASS: activation, three commands, file-bound Webview panel');
     await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(process.env.EEG_SMOKE_FILE), 'kieranEEG.viewer');
     await waitForTab(tab => tab.input instanceof vscode.TabInputCustom);
     console.log('EEG_HOST_PASS: custom readonly editor opened');

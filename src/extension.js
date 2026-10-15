@@ -9,6 +9,11 @@ const { discover, publicDataset, RecordingCache, loadSegment } = require('./adap
 function activate(context) {
   const resourceRoots = ['media', 'assets'].map(folder => vscode.Uri.joinPath(context.extensionUri, folder));
   async function open(uri, profile = 'auto') {
+    uri = uri || vscode.window.tabGroups.activeTabGroup?.activeTab?.input?.uri || vscode.window.activeTextEditor?.document.uri;
+    if (!uri || uri.scheme !== 'file' || !/(?:_eeg\.csv|_meta\.json|_events\.csv|session\.json|trials\.csv|events\.csv)$/i.test(path.basename(uri.fsPath))) {
+      vscode.window.showInformationMessage('请选择 EEG 文件。');
+      return;
+    }
     const panel = vscode.window.createWebviewPanel('kieranEEG.viewer', 'Kieran EEG Viewer · 波形与 PSD', vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: resourceRoots });
     await setupPanel(panel, uri, profile);
@@ -18,20 +23,16 @@ function activate(context) {
     const cache = new RecordingCache();
     let dataset = null, sourceUri = initialUri, profile = initialProfile, version = 0, disposed = false;
     const send = message => disposed ? Promise.resolve(false) : panel.webview.postMessage(message);
-    async function chooseUri() {
-      const selected = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false,
-        canSelectMany: false, openLabel: '打开 EEG 采集目录' });
-      return selected?.[0];
-    }
     async function openDataset(uri, requestedProfile) {
       const current = ++version;
-      if (!uri) uri = await chooseUri();
-      if (!uri || disposed || current !== version) { await send({ type: 'idle' }); return; }
+      if (!uri || disposed || current !== version) return;
       if (uri.scheme !== 'file') throw new Error('当前版本支持本地文件与通过 SSH 扩展宿主访问的磁盘文件');
-      await send({ type: 'loading', message: '正在识别会话与 trial…' });
+      await send({ type: 'loading' });
       const next = await discover(uri.fsPath, requestedProfile);
       if (disposed || current !== version) return;
-      dataset = next; sourceUri = uri; profile = requestedProfile; cache.clear();
+      dataset = next; sourceUri = uri;
+      profile = next.sessions.find(session => session.id === next.initialSession).profile;
+      cache.clear();
       panel.title = `EEG · ${path.basename(next.root)}`;
       await send({ type: 'dataset', data: publicDataset(next) });
     }
@@ -40,15 +41,10 @@ function activate(context) {
       try {
         if (!message || typeof message.type !== 'string') return;
         if (message.type === 'ready') {
-          if (initialUri) await openDataset(initialUri, profile);
-          else await send({ type: 'welcome', profile });
-        } else if (message.type === 'open') {
-          const requested = ['auto', 'ssvep', 'assr'].includes(message.profile) ? message.profile : 'auto';
-          await openDataset(undefined, requested);
+          await openDataset(initialUri, profile);
         } else if (message.type === 'profile') {
-          if (!['auto', 'ssvep', 'assr'].includes(message.profile)) return;
+          if (!['ssvep', 'assr'].includes(message.profile)) return;
           if (sourceUri) await openDataset(sourceUri, message.profile);
-          else await send({ type: 'welcome' });
         } else if (message.type === 'refresh') {
           if (sourceUri) await openDataset(sourceUri, profile);
         } else if (message.type === 'segment') {
@@ -87,10 +83,14 @@ function activate(context) {
   for (const [command, profile] of [['open', 'auto'], ['openSSVEP', 'ssvep'], ['openASSR', 'assr']]) {
     context.subscriptions.push(vscode.commands.registerCommand(`kieranEEG.${command}`, uri => open(uri, profile)));
   }
-  context.subscriptions.push(vscode.window.registerCustomEditorProvider('kieranEEG.viewer', {
+  const provider = {
     openCustomDocument(uri) { return { uri, dispose() {} }; },
     resolveCustomEditor(document, panel) { return setupPanel(panel, document.uri, 'auto'); }
-  }, { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false }));
+  };
+  for (const viewType of ['kieranEEG.viewer', 'kieranEEG.metadataViewer']) {
+    context.subscriptions.push(vscode.window.registerCustomEditorProvider(viewType, provider,
+      { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false }));
+  }
 }
 
 module.exports = { activate, deactivate() {} };

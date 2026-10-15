@@ -5,7 +5,7 @@ const fsp = fs.promises;
 const path = require('node:path');
 const readline = require('node:readline');
 
-// 本插件只适配两个采集项目；不根据文件名猜测采样率、单位或刺激频率。
+// 本插件只适配 SSVEP 与 ASSR；不根据文件名猜测采样率、单位或刺激频率。
 const PROFILES = ['auto', 'ssvep', 'assr'];
 const MAX_BYTES = 256 * 1024 * 1024;
 const MAX_SAMPLES = 2_000_000;
@@ -152,7 +152,7 @@ async function discover(input, profile = 'auto') {
     sessions.push(session);
   }
   sessions.sort((a, b) => a.label.localeCompare(b.label, 'en', { numeric: true }));
-  if (!sessions.length) throw new Error(`没有找到${profile === 'auto' ? ' Bigshen SSVEP 或 ASSR' : ` ${profile.toUpperCase()}`} 采集数据。请选择包含元数据的会话或采集目录。${warnings[0] ? `\n${warnings[0]}` : ''}`);
+  if (!sessions.length) throw new Error(`没有找到${profile === 'auto' ? ' SSVEP 或 ASSR' : ` ${profile.toUpperCase()}`} 数据。${warnings[0] ? `\n${warnings[0]}` : ''}`);
   let initialSession = sessions[0].id, initialTrial;
   if (!stat.isDirectory()) {
     for (const session of sessions) {
@@ -169,7 +169,8 @@ async function discover(input, profile = 'auto') {
 }
 
 function publicDataset(dataset) {
-  return { rootLabel: path.basename(dataset.root), profile: dataset.profile, warnings: dataset.warnings,
+  const profile = dataset.sessions.find(session => session.id === dataset.initialSession)?.profile || dataset.sessions[0].profile;
+  return { rootLabel: path.basename(dataset.root), profile, warnings: dataset.warnings,
     initialSession: dataset.initialSession, initialTrial: dataset.initialTrial,
     sessions: dataset.sessions.map(s => ({ id: s.id, profile: s.profile, label: s.label, subject: s.subject,
       date: s.date, info: s.info, trials: s.trials.map(t => ({ id: t.id, label: t.label, condition: t.condition,

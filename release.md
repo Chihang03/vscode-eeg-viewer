@@ -1,8 +1,10 @@
-# Kieran EEG Viewer 0.1.1
+# Kieran EEG Viewer 0.1.2
 
-面向 Bigshen SSVEP 和 ASSR 两个采集项目的 VS Code 脑电查看器，提供专用入口和自动识别。
+在 VS Code 中直接查看 SSVEP 和 ASSR 文件。
 
-- 多通道波形，支持 trial / 阶段切换、时间缩放与平移。
+- 波形默认显示三通道 1:1:1 等权平均，采用紧凑图高；可切换为分别显示。
+- 数据模式直接显示当前文件对应的 SSVEP 或 ASSR。
+- 移除目录选择入口、欢迎页和说明性页脚。
 - 拖动波形框选区间，联动计算 Welch PSD；支持窗长、重叠、频率范围和 dB / 线性显示。
 - 元数据单位换算、样本索引切片、目标频率与谐波参考线。
 - 可选零相位带通和 50 Hz 陷波，固定对照 A。
@@ -13,7 +15,7 @@
 
 下载本次 Release 的 `.vsix` 文件，在 VS Code 扩展视图的「… → 从 VSIX 安装…」中选择它。
 
-安装后，在命令面板运行「EEG：打开数据（自动识别）」，或分别选择 SSVEP / ASSR 命令。要求 VS Code 1.85+，运行时不需要 Python。
+安装后，直接打开 `*_eeg.csv`，或右键 EEG 文件选择「EEG：查看波形与 PSD」。要求 VS Code 1.85+，运行时不需要 Python。
 
 `SHA256SUMS.txt` 提供安装包校验值。本次发布通过 GitHub 分发，不包含 Marketplace 商店发布。
 
