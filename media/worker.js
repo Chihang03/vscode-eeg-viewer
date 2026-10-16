@@ -16,6 +16,6 @@ self.onmessage = ({ data: message }) => {
       processedKey = key;
     }
     const psd = self.EEGDSP.welch(processed.columns, source.fs, message.options || {});
-    self.postMessage({ id, type: 'result', psd, warnings: processed.warnings, columns: processed.columns, average: processed.average });
+    self.postMessage({ id, type: 'result', psd, analysis: message.analysis, warnings: processed.warnings, columns: processed.columns, average: processed.average });
   } catch (error) { self.postMessage({ id, type: 'error', message: error.message }); }
 };

@@ -70,6 +70,19 @@ test('ASSR 用半开索引切片，BigInt 时间映射不丢精度，仅使用�
   await assert.rejects(loadSegment(data, s.id, s.trials[2].id, cache), /索引/);
 });
 
+test('ASSR 连续记录提供可点选事件的稳定 ID、原始样本边界和独立目标频率', async t => {
+  const { assr } = await fixture(t), data = await discover(assr), session = data.sessions[0];
+  const all = await loadSegment(data, session.id, 'continuous', new RecordingCache());
+  assert.equal(all.id, 'continuous'); assert.equal(all.startIndex, 0); assert.equal(all.sampleCount, 4);
+  const stimulus = all.regions.find(r => r.id === session.trials[0].id);
+  assert.deepEqual([stimulus.start, stimulus.end, stimulus.kind, stimulus.valid], [1, 3, 'stimulus', true]);
+  assert.deepEqual(stimulus.targets, [12]); assert.match(stimulus.label, /AM12.*trial 1/);
+  const baseline = all.regions.find(r => r.id === 'stage:1');
+  assert.deepEqual([baseline.start, baseline.end, baseline.kind], [0, 2, 'baseline']); assert.deepEqual(baseline.targets, []);
+  assert.ok(!all.regions.some(r => r.id === 'stage:2' || r.id === session.trials[2].id));
+  assert.equal(new Set(all.regions.map(r => r.id)).size, all.regions.length);
+});
+
 test('缺少关联文件、损坏的行和目录越界会报告错误', async t => {
   const { assr, ss, prefix } = await fixture(t);
   const cache = new RecordingCache(); await fs.appendFile(prefix + '_eeg.csv', '1,2\n');

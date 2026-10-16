@@ -4,9 +4,9 @@
   const vscode = acquireVsCodeApi();
   const COLORS = ['#6eb8ac', '#7dabef', '#e2ac70', '#c19ae5', '#dc8492'];
   const state = { dataset: null, session: null, segment: null, columns: null, average: null, psd: null,
-    shown: new Set(), view: [0, 1], psdView: null, psdDragging: null, selection: null, pinned: null,
+    shown: new Set(), view: [0, 1], psdView: null, psdDragging: null, selection: null, event: null, psdContext: null, pinned: null,
     request: 0, computation: 0, dragging: null, filterWarnings: [], psdError: null, mode: 'ssvep' };
-  let worker, resolveWorker, rejectWorker;
+  let worker, resolveWorker, rejectWorker, waveClickTimer;
   const workerReady = new Promise((resolve, reject) => { resolveWorker = resolve; rejectWorker = reject; });
   // ready 的拒绝在 calculate 中呈现，避免初始化失败成为未处理的 Promise。
   workerReady.catch(() => {});
@@ -29,13 +29,22 @@
   function processingLabel(c = config()) {
     return `${c.filter ? `2阶高通 ${c.highpass} Hz + 2阶低通 ${c.lowpass} Hz，前后向零相位` : '原始信号'}${c.notch ? ' + 50 Hz Q30 零相位陷波' : ''}`;
   }
+  function analysisRange() {
+    if ($('psd-source').value === 'selection' && state.selection) return state.selection.map(t => Math.round(t * state.segment.fs));
+    if ($('psd-source').value === 'event' && state.event) return [state.event.start, state.event.end];
+    return [0, state.segment.sampleCount];
+  }
   function analysisOptions() {
-    const fs = state.segment.fs, source = $('psd-source').value;
-    const range = source === 'view' ? state.view : source === 'selection' ? state.selection : [0, duration()];
-    if (!range) throw new Error('请先在波形上拖动框选一个分析区间');
-    return { start: Math.max(0, Math.floor(range[0] * fs)),
-      end: Math.min(state.segment.sampleCount, Math.ceil(range[1] * fs)),
-      seconds: $('window').value === 'full' ? 'full' : Number($('window').value), overlap: Number($('overlap').value) };
+    const [start, end] = analysisRange(), full = $('psd-method').value === 'full';
+    return { start, end, seconds: full ? 'full' : Number($('window').value), overlap: full ? 0 : Number($('overlap').value) };
+  }
+  function analysisContext() {
+    const source = $('psd-source').value, [start, end] = analysisRange();
+    const label = source === 'selection' ? '框选区间' : source === 'event' ? state.event.label : state.segment.label;
+    const targets = state.segment.profile === 'assr'
+      ? [...new Set(state.segment.regions.filter(r => r.end > start && r.start < end).flatMap(r => r.targets || []))]
+      : state.segment.targets;
+    return { source, label, eventId: source === 'event' ? state.event.id : '', targets, config: config() };
   }
 
   async function initWorker() {
@@ -53,11 +62,11 @@
         if (message.type === 'error' && message.id === 0) { rejectWorker(new Error(message.message)); return; }
         if (message.id !== state.computation) return;
         if (message.type === 'error') { computationError(message.message); return; }
-        state.psd = message.psd; state.columns = message.columns; state.average = message.average; state.psdError = null;
+        state.psd = message.psd; state.psdContext = message.analysis; state.columns = message.columns; state.average = message.average; state.psdError = null;
         state.filterWarnings = message.warnings || [];
         $('workspace').dataset.state = 'ready'; text('compute-status', '');
         const p = state.psd, start = p.start / state.segment.fs, end = p.end / state.segment.fs;
-        text('psd-info', `${format(start, 3)}–${format(end, 3)} s · Δf ${format(p.binHz, 4)} Hz · ${p.segments} 窗`);
+        text('psd-info', `${state.psdContext.label} · ${format(start, 3)}–${format(end, 3)} s · ${format(end - start, 3)} s · Δf ${format(p.binHz, 4)} Hz${p.method === 'welch' ? ` · ${p.segments} 窗` : ''}${p.usedSamples < p.samples ? ` · 有效 ${format(p.usedSamples / state.segment.fs, 3)} s` : ''}`);
         $('export-png').disabled = !state.columns; $('export-csv').disabled = !p.segments; $('pin').disabled = !p.segments;
         drawWave(); drawPSD(); updateWarnings();
       };
@@ -75,16 +84,16 @@
   async function calculate(load = false) {
     if (!state.segment) return;
     const id = ++state.computation, segment = state.segment;
-    state.psd = null; $('export-csv').disabled = true; $('pin').disabled = true;
+    state.psd = null; $('export-png').disabled = true; $('export-csv').disabled = true; $('pin').disabled = true;
     $('workspace').dataset.state = 'computing';
     text('compute-status', '计算中…');
     try {
-      const options = analysisOptions(), settings = config();
+      const options = analysisOptions(), analysis = analysisContext(), settings = analysis.config;
       await workerReady;
       if (id !== state.computation || segment !== state.segment) return;
       const needsLoad = load || state.workerSource !== segment;
       worker.postMessage({ id, type: needsLoad ? 'load' : 'compute',
-        ...(needsLoad ? { source: { values: segment.values, fs: segment.fs } } : {}), config: settings, options });
+        ...(needsLoad ? { source: { values: segment.values, fs: segment.fs } } : {}), config: settings, options, analysis });
       state.workerSource = segment;
     } catch (error) { if (id === state.computation) computationError(error.message); }
   }
@@ -108,6 +117,12 @@
     const entries = [];
     if (state.session.profile === 'assr') {
       entries.push({ id: 'continuous', label: '连续记录', kind: 'recording', valid: true });
+      if (state.segment?.id === 'continuous') {
+        entries.push(...state.segment.regions);
+        const included = new Set(entries.map(e => e.id));
+        entries.push(...state.session.trials.filter(t => !included.has(t.id)));
+        return entries;
+      }
       for (const stage of state.session.stages || []) entries.push({ ...stage, valid: true });
     }
     entries.push(...state.session.trials);
@@ -129,12 +144,12 @@
       }
       const button = document.createElement('button'); button.className = 'trial-button';
       button.setAttribute('role', 'listitem'); button.dataset.segmentId = entry.id;
-      button.classList.toggle('active', entry.id === state.requestedId);
+      button.classList.toggle('active', entry.id === activeEntryId());
       const dot = document.createElement('span'); dot.className = `trial-dot${entry.valid ? '' : ' invalid'}`;
       const title = document.createElement('span'); title.textContent = entry.label;
       const indicator = document.createElement('small'); indicator.textContent = entry.kind === 'stimulus' ? '↗' : '·';
       button.title = entry.valid ? entry.label : `${entry.label} · ${entry.reason || entry.status || '采集标记无效'}`;
-      button.append(dot, title, indicator); button.addEventListener('click', () => requestSegment(entry.id)); list.append(button);
+      button.append(dot, title, indicator); button.addEventListener('click', () => showEntry(entry.id)); list.append(button);
     }
     if (!list.children.length) { const hint = document.createElement('p'); hint.className = 'muted empty-hint'; hint.textContent = '没有匹配的区间'; list.append(hint); }
     updateNavigation();
@@ -144,12 +159,36 @@
     state.session = state.dataset.sessions.find(s => s.id === id) || state.dataset.sessions[0];
     state.mode = state.session.profile; $('profile').value = state.mode;
     $('search').value = ''; renderSessions();
-    requestSegment(initialTrial || state.session.trials[0]?.id || 'continuous');
+    requestSegment(state.session.profile === 'assr' ? 'continuous' : initialTrial || state.session.trials[0]?.id);
+  }
+  function activeEntryId() { return state.event?.id || state.requestedId; }
+  function showEntry(id) {
+    if (state.session.profile !== 'assr') { requestSegment(id); return; }
+    if (!state.segment || state.segment.id !== 'continuous') return;
+    if (id === 'continuous') {
+      state.event = null; state.selection = null; $('psd-source').value = 'segment';
+      setView(0, duration()); renderTrials(); calculate(); return;
+    }
+    const event = state.segment.regions.find(r => r.id === id);
+    if (event) selectEvent(event);
+    else notice('该事件没有可用的 EEG 样本区间。', true);
+  }
+  function selectEvent(event, zoom = false) {
+    state.event = event; state.selection = null; $('psd-source').value = 'event';
+    if (zoom) setView(event.start / state.segment.fs, event.end / state.segment.fs);
+    else updateView();
+    renderTrials(); calculate();
+  }
+  function eventAt(sample) {
+    const matches = state.segment.regions.filter(r => r.start <= sample && r.end > sample);
+    // 刺激使用样本索引；与估算阶段边界重叠时优先选择刺激区间。
+    return matches.find(r => r.kind === 'stimulus') || matches[0];
   }
   function requestSegment(id) {
+    clearTimeout(waveClickTimer);
     finishPSDPan();
     state.request++; state.computation++; state.requestedId = id;
-    state.segment = null; state.columns = null; state.average = null; state.psd = null; state.selection = null;
+    state.segment = null; state.columns = null; state.average = null; state.psd = null; state.psdContext = null; state.selection = null; state.event = null; state.dragging = null;
     state.filterWarnings = []; state.psdError = null;
     $('workspace').hidden = false; $('workspace').dataset.state = 'loading';
     text('record-title', '正在读取 EEG…'); text('record-subtitle', state.session.label);
@@ -157,16 +196,20 @@
     text('compute-status', '读取中…'); text('psd-info', ''); text('selection-label', ''); $('selection-footer').hidden = true;
     for (const id of ['export-png', 'export-csv', 'pin', 'zoom-selection', 'clear-selection']) $(id).disabled = true;
     $('channels').replaceChildren(); $('details').replaceChildren();
+    $('event-strip').hidden = true;
     renderTrials(); drawWave(); drawPSD();
     vscode.postMessage({ type: 'segment', sessionId: state.session.id, segmentId: id, requestId: state.request });
   }
 
   function acceptSegment(segment) {
-    state.segment = segment; state.selection = null;
-    state.view = [0, segment.profile === 'assr' && segment.id === 'continuous' ? Math.min(12, duration()) : duration()];
+    state.segment = segment; state.selection = null; state.event = null;
+    state.view = [0, duration()];
     if (segment.stages?.length) state.session.stages = segment.stages;
     state.shown = new Set(segment.channels);
     $('psd-source').value = 'segment';
+    $('psd-source').options[0].textContent = segment.profile === 'assr' ? '完整记录' : '完整 trial';
+    $('source-event').hidden = segment.profile !== 'assr';
+    buildEventStrip();
     text('record-title', segment.label); text('record-subtitle', `${segment.sessionLabel} · ${segment.sampleCount.toLocaleString()} 样本 · ${format(duration(), 3)} s`);
     text('wave-unit', segment.unit);
     const channels = $('channels'); channels.replaceChildren();
@@ -182,6 +225,31 @@
       label.append(checkbox, document.createTextNode(channel)); channels.append(label);
     });
     renderTrials(); renderDetails(); updateView(); updatePinInfo(); updateWarnings(); calculate(true);
+  }
+
+  function buildEventStrip() {
+    const strip = $('event-strip'); strip.replaceChildren();
+    if (state.segment.profile !== 'assr') { strip.hidden = true; return; }
+    state.segment.regions.forEach((event, index) => {
+      const button = document.createElement('button'); button.type = 'button'; button.dataset.region = index; button.dataset.kind = event.kind;
+      button.textContent = event.label;
+      button.title = `${event.label} · ${format(event.start / state.segment.fs, 3)}–${format(event.end / state.segment.fs, 3)} s${event.valid ? '' : ' · 采集标记无效'}`;
+      button.setAttribute('aria-label', button.title);
+      button.addEventListener('click', () => selectEvent(event));
+      button.addEventListener('dblclick', () => selectEvent(event, true));
+      strip.append(button);
+    });
+    strip.hidden = !strip.children.length;
+  }
+  function updateEventStrip() {
+    if (!state.segment || $('event-strip').hidden) return;
+    const [a, b] = state.view, fs = state.segment.fs;
+    for (const button of $('event-strip').children) {
+      const event = state.segment.regions[button.dataset.region], start = Math.max(a, event.start / fs), end = Math.min(b, event.end / fs);
+      button.hidden = end <= start;
+      button.style.left = `${(start - a) / (b - a) * 100}%`; button.style.width = `${Math.max(0, (end - start) / (b - a) * 100)}%`;
+      button.setAttribute('aria-pressed', String(state.event?.id === event.id));
+    }
   }
 
   function renderDetails() {
@@ -200,18 +268,22 @@
       for (const event of state.segment.events) {
         const button = document.createElement('button'); const time = event.index / state.segment.fs;
         button.textContent = `${format(time, 3)} s · ${event.label}`; button.title = event.source;
-        button.addEventListener('click', () => { const width = Math.min(4, duration()); setView(time - width / 2, time + width / 2); }); list.append(button);
+        button.addEventListener('click', () => {
+          const region = state.segment.regions.find(r => r.start === event.index) || state.segment.regions.find(r => r.end === event.index);
+          if (region) selectEvent(region);
+          else { const width = Math.min(4, duration()); setView(time - width / 2, time + width / 2); }
+        }); list.append(button);
       }
       container.append(list);
     }
   }
   function updateNavigation() {
-    const entries = filteredEntries(), index = entries.findIndex(t => t.id === state.requestedId);
+    const entries = filteredEntries(), index = entries.findIndex(t => t.id === activeEntryId());
     $('previous').disabled = index <= 0; $('next').disabled = index < 0 || index >= entries.length - 1;
   }
   function navigate(delta) {
-    const entries = filteredEntries(), index = entries.findIndex(t => t.id === state.requestedId), next = entries[index + delta];
-    if (next) requestSegment(next.id);
+    const entries = filteredEntries(), index = entries.findIndex(t => t.id === activeEntryId()), next = entries[index + delta];
+    if (next) showEntry(next.id);
   }
   function updateView() {
     if (!state.segment) return;
@@ -219,17 +291,17 @@
     text('view-range', `${format(a)}–${format(b)} s`);
     $('pan').value = b - a >= total ? '0' : String(Math.round(a / (total - (b - a)) * 1000));
     $('pan').disabled = b - a >= total;
-    const selection = state.selection;
+    $('source-event').disabled = !state.event; $('source-selection').disabled = !state.selection;
+    const selection = state.selection || (state.event ? [state.event.start / state.segment.fs, state.event.end / state.segment.fs] : null);
     $('selection-footer').hidden = !selection;
     text('selection-label', selection ? `${format(selection[0], 3)}–${format(selection[1], 3)} s` : '');
     $('zoom-selection').disabled = !selection; $('clear-selection').disabled = !selection;
     drawWave();
   }
-  function setView(a, b, recompute = true) {
+  function setView(a, b) {
     if (!state.segment) return;
     const total = duration(), width = Math.max(Math.min(0.05, total), Math.min(total, b - a));
     const left = Math.max(0, Math.min(total - width, a)); state.view = [left, left + width]; updateView();
-    if (recompute && $('psd-source').value === 'view') calculate();
   }
 
   function prepareCanvas(id) {
@@ -257,6 +329,7 @@
   function shownIndices() { return state.segment?.channels.map((c, i) => state.shown.has(c) ? i : -1).filter(i => i >= 0) || []; }
 
   function drawWave() {
+    updateEventStrip();
     const p = prepareCanvas('wave'), { ctx, left, right, top, bottom, muted, border } = p;
     if (!state.columns || !state.average || !state.segment) { canvasEmpty(p, state.psdError || ''); return; }
     const [a, b] = state.view, fs = state.segment.fs, width = right - left;
@@ -265,7 +338,6 @@
       const begin = Math.max(a, region.start / fs), finish = Math.min(b, region.end / fs);
       if (finish <= begin) continue;
       ctx.fillStyle = region.kind === 'rest' ? '#7dabef0b' : '#6eb8ac0b'; ctx.fillRect(toX(begin), top, toX(finish) - toX(begin), bottom - top);
-      if (toX(finish) - toX(begin) > 55) { ctx.fillStyle = muted; ctx.textAlign = 'left'; ctx.fillText(region.label || '', toX(begin) + 5, 14); }
     }
     for (const t of ticks(a, b, Math.max(2, width / 120))) {
       const x = toX(t); line(ctx, x, top, x, bottom, border); ctx.fillStyle = muted; ctx.textAlign = 'center'; ctx.fillText(`${format(t, b - a < 1 ? 2 : 1)} s`, x, bottom + 17);
@@ -312,8 +384,9 @@
       const t = event.index / fs; if (t < a || t > b) continue;
       const x = toX(t); line(ctx, x, top, x, bottom, '#a6b3c177', [3, 4]);
     }
-    if (state.selection) {
-      const x1 = Math.max(left, toX(state.selection[0])), x2 = Math.min(right, toX(state.selection[1]));
+    const selected = state.selection || (state.event ? [state.event.start / fs, state.event.end / fs] : null);
+    if (selected) {
+      const x1 = Math.max(left, toX(selected[0])), x2 = Math.min(right, toX(selected[1]));
       if (x2 > x1) { ctx.fillStyle = '#6eb8ac25'; ctx.fillRect(x1, top, x2 - x1, bottom - top); line(ctx, x1, top, x1, bottom, '#6eb8ac'); line(ctx, x2, top, x2, bottom, '#6eb8ac'); }
     }
   }
@@ -321,7 +394,7 @@
   function frequencyBounds() {
     const limit = (state.segment?.fs || 500) / 2;
     const [a, b] = state.psdView || [0, Math.min(limit, 60)];
-    // 最窄显示两个实际频率间隔；放大不改变 Welch 的频率分辨率。
+    // 最窄显示两个实际频率间隔；放大不改变频谱的频率分辨率。
     const width = Math.min(limit, Math.max(state.psd?.binHz * 2 || 0, b - a));
     const start = Math.max(0, Math.min(limit - width, (a + b - width) / 2));
     return [start, start + width];
@@ -370,7 +443,7 @@
     $('reset-psd').disabled = !state.psd?.segments;
     if (!state.psd?.segments || !state.segment) { canvasEmpty(p, state.psdError || (state.psd ? state.psd.warnings.join(' ') : '等待频谱计算…')); return; }
     const [minF, maxF] = frequencyBounds(), logarithmic = $('psd-scale').value === 'db', indices = shownIndices();
-    p.canvas.setAttribute('aria-label', `各通道 Welch PSD，${format(minF, 4)}–${format(maxF, 4)} Hz`);
+    p.canvas.setAttribute('aria-label', `各通道 PSD，${format(minF, 4)}–${format(maxF, 4)} Hz`);
     const convert = y => logarithmic ? 10 * Math.log10(Math.max(1e-30, y)) : y;
     const curves = indices.map(c => ({ f: state.psd.frequencies, p: state.psd.power[c], color: COLORS[c % COLORS.length], dash: [] }));
     if (compatiblePin()) for (const c of indices) {
@@ -399,7 +472,7 @@
     const unit = state.segment.unit === 'μV' ? 'μV²/Hz' : `${state.segment.unit}²/Hz`;
     ctx.fillStyle = muted; ctx.textAlign = 'left'; ctx.fillText(logarithmic ? `dB re 1 ${unit}` : unit, 10, 12);
     const markers = [];
-    for (const frequency of state.segment.targets) for (let harmonic = 1; harmonic <= 3; harmonic++) {
+    for (const frequency of state.psdContext?.targets || []) for (let harmonic = 1; harmonic <= 3; harmonic++) {
       const f = frequency * harmonic; if (f >= minF && f <= maxF) markers.push({ f, label: harmonic === 1 ? `${frequency} Hz` : `${harmonic}f (${format(f, 1)})` });
     }
     let lastLabelX = -Infinity;
@@ -435,6 +508,19 @@
     const rect = $('wave').getBoundingClientRect(), x = Math.max(63, Math.min(rect.width - 19, event.clientX - rect.left));
     return state.view[0] + (x - 63) / (rect.width - 82) * (state.view[1] - state.view[0]);
   }
+  function selectionTime(event) {
+    const fs = state.segment.fs, t = canvasTime(event);
+    let sample = Math.max(0, Math.min(state.segment.sampleCount, Math.round(t * fs)));
+    if (state.segment.profile === 'assr' && !event.altKey) {
+      const rect = $('wave').getBoundingClientRect(), threshold = 6 * (state.view[1] - state.view[0]) * fs / (rect.width - 82);
+      let distance = threshold;
+      for (const region of state.segment.regions) for (const boundary of [region.start, region.end]) {
+        const delta = Math.abs(boundary - t * fs);
+        if (delta <= distance) { sample = boundary; distance = delta; }
+      }
+    }
+    return sample / fs;
+  }
   function tooltip(id, event, content) {
     const target = $(id), parent = target.parentElement.getBoundingClientRect();
     target.hidden = false; target.textContent = content;
@@ -444,13 +530,15 @@
 
   $('wave').addEventListener('pointerdown', event => {
     if (!state.segment || !state.columns || event.button !== 0) return;
-    const t = canvasTime(event); state.dragging = { t, pointerId: event.pointerId }; state.selection = [t, t];
+    clearTimeout(waveClickTimer);
+    const t = selectionTime(event); state.dragging = { t, x: event.clientX, pointerId: event.pointerId, previous: state.selection };
+    state.selection = [t, t];
     $('wave').setPointerCapture(event.pointerId); $('wave-tooltip').hidden = true;
   });
   $('wave').addEventListener('pointermove', event => {
     if (!state.segment || !state.columns) return;
     const t = canvasTime(event);
-    if (state.dragging) { state.selection = [Math.min(state.dragging.t, t), Math.max(state.dragging.t, t)]; updateView(); return; }
+    if (state.dragging) { const end = selectionTime(event); state.selection = [Math.min(state.dragging.t, end), Math.max(state.dragging.t, end)]; updateView(); return; }
     const index = Math.max(0, Math.min(state.segment.sampleCount - 1, Math.round(t * state.segment.fs)));
     const values = $('wave-mode').value === 'average'
       ? [`平均  ${format(state.average[index], 3)} ${state.segment.unit}`]
@@ -459,19 +547,30 @@
   });
   function finishSelection(event) {
     if (!state.dragging) return;
-    if (event.type === 'pointercancel' || !state.selection || state.selection[1] - state.selection[0] < 1 / state.segment.fs) state.selection = null;
-    state.dragging = null;
+    const drag = state.dragging; state.dragging = null;
     if ($('wave').hasPointerCapture(event.pointerId)) $('wave').releasePointerCapture(event.pointerId);
-    $('psd-source').value = state.selection ? 'selection' : 'segment'; updateView(); calculate();
+    if (event.type === 'pointercancel') { state.selection = drag.previous; updateView(); return; }
+    if (Math.abs(event.clientX - drag.x) < 4) {
+      state.selection = drag.previous; updateView();
+      const sample = Math.floor(canvasTime(event) * state.segment.fs);
+      const region = state.segment.profile === 'assr' && eventAt(sample);
+      // 等待双击判定，避免恢复全段视野时误改当前 PSD 来源。
+      if (region) { const segment = state.segment; waveClickTimer = setTimeout(() => { if (state.segment === segment) selectEvent(region); }, 250); }
+      return;
+    }
+    const end = selectionTime(event);
+    state.selection = end === drag.t ? null : [Math.min(drag.t, end), Math.max(drag.t, end)];
+    $('psd-source').value = state.selection ? 'selection' : state.event ? 'event' : 'segment'; updateView(); calculate();
   }
   $('wave').addEventListener('pointerup', finishSelection); $('wave').addEventListener('pointercancel', finishSelection);
+  $('wave').addEventListener('lostpointercapture', event => finishSelection({ type: 'pointercancel', pointerId: event.pointerId }));
   $('wave').addEventListener('pointerleave', () => { $('wave-tooltip').hidden = true; });
   $('wave').addEventListener('wheel', event => {
     if (!state.segment) return; event.preventDefault();
     const pivot = canvasTime(event), factor = event.deltaY > 0 ? 1.3 : 1 / 1.3;
     setView(pivot - (pivot - state.view[0]) * factor, pivot + (state.view[1] - pivot) * factor);
   }, { passive: false });
-  $('wave').addEventListener('dblclick', () => setView(0, duration()));
+  $('wave').addEventListener('dblclick', () => { clearTimeout(waveClickTimer); setView(0, duration()); });
   $('psd').addEventListener('wheel', event => {
     if (!state.psd?.segments || !state.segment || !event.deltaY) return;
     event.preventDefault(); finishPSDPan();
@@ -521,7 +620,11 @@
   $('previous').addEventListener('click', () => navigate(-1)); $('next').addEventListener('click', () => navigate(1));
   window.addEventListener('keydown', event => {
     if (event.altKey && ['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); navigate(event.key === 'ArrowLeft' ? -1 : 1); }
-    if (event.key === 'Escape' && state.selection) clearSelection();
+    if (event.key === 'Escape') {
+      clearTimeout(waveClickTimer);
+      if (state.dragging) { finishSelection({ type: 'pointercancel', pointerId: state.dragging.pointerId }); return; }
+    }
+    if (event.key === 'Escape' && (state.selection || state.event)) clearSelection();
   });
   for (const id of ['signal-mode', 'notch', 'highpass', 'lowpass']) $(id).addEventListener('change', () => {
     document.querySelector('.filter-control').hidden = $('signal-mode').value !== 'filtered';
@@ -534,22 +637,36 @@
     $('wave-tooltip').hidden = true;
     drawWave();
   });
-  for (const id of ['psd-source', 'window', 'overlap']) $(id).addEventListener('change', () => calculate());
+  $('psd-source').addEventListener('change', () => {
+    if ($('psd-source').value !== 'selection') state.selection = null;
+    if ($('psd-source').value === 'segment') state.event = null;
+    updateView(); renderTrials(); calculate();
+  });
+  $('psd-method').addEventListener('change', () => {
+    for (const control of document.querySelectorAll('.welch-control')) control.hidden = $('psd-method').value !== 'welch';
+    calculate();
+  });
+  for (const id of ['window', 'overlap']) $(id).addEventListener('change', () => calculate());
   $('psd-scale').addEventListener('change', drawPSD);
   $('zoom-in').addEventListener('click', () => { const [a, b] = state.view; setView(a + (b - a) / 4, b - (b - a) / 4); });
   $('zoom-out').addEventListener('click', () => { const [a, b] = state.view; setView(a - (b - a) / 2, b + (b - a) / 2); });
   $('reset-view').addEventListener('click', () => setView(0, duration()));
-  $('zoom-selection').addEventListener('click', () => { if (state.selection) setView(...state.selection); });
-  function clearSelection() { state.selection = null; if ($('psd-source').value === 'selection') $('psd-source').value = 'segment'; updateView(); calculate(); }
+  $('zoom-selection').addEventListener('click', () => {
+    if (state.selection) setView(...state.selection);
+    else if (state.event) setView(state.event.start / state.segment.fs, state.event.end / state.segment.fs);
+  });
+  function clearSelection() {
+    if (state.selection) state.selection = null; else state.event = null;
+    $('psd-source').value = state.event ? 'event' : 'segment'; updateView(); renderTrials(); calculate();
+  }
   $('clear-selection').addEventListener('click', clearSelection);
   function pan(delta) { const [a, b] = state.view; setView(a + delta * (b - a), b + delta * (b - a)); }
   $('pan-left').addEventListener('click', () => pan(-0.75)); $('pan-right').addEventListener('click', () => pan(0.75));
-  $('pan').addEventListener('input', () => { const width = state.view[1] - state.view[0], a = Number($('pan').value) / 1000 * (duration() - width); setView(a, a + width, false); });
-  $('pan').addEventListener('change', () => { if ($('psd-source').value === 'view') calculate(); });
+  $('pan').addEventListener('input', () => { const width = state.view[1] - state.view[0], a = Number($('pan').value) / 1000 * (duration() - width); setView(a, a + width); });
   $('pin').addEventListener('click', () => {
     if (!state.psd?.segments) return;
-    state.pinned = { psd: state.psd, label: state.segment.label, sessionLabel: state.segment.sessionLabel,
-      unit: state.segment.unit, channels: [...state.segment.channels], config: config() };
+    state.pinned = { psd: state.psd, label: state.psdContext.label, sessionLabel: state.segment.sessionLabel,
+      unit: state.segment.unit, channels: [...state.segment.channels], config: state.psdContext.config };
     updatePinInfo(); drawPSD();
   });
   $('clear-pin').addEventListener('click', () => { state.pinned = null; updatePinInfo(); drawPSD(); });
@@ -562,11 +679,13 @@
     const p = state.psd, s = state.segment;
     const unit = s.unit === 'μV' ? 'uV2_per_Hz' : `${s.unit}2_per_Hz`;
     const header = ['frequency_hz', ...s.channels.map(c => `${c}_PSD_${unit}`), 'fs_hz', 'source_start_index', 'source_end_index',
-      'nperseg', 'averaged_segments', 'window', 'overlap_fraction', 'processing', 'session', 'segment'];
+      'nperseg', 'averaged_segments', 'window', 'overlap_fraction', 'processing', 'session', 'segment',
+      'analysis_source', 'event_id', 'method', 'finite_samples', 'used_samples'];
     const rows = [header.map(csvCell).join(',')];
     p.frequencies.forEach((f, i) => rows.push([f, ...p.power.map(c => c[i]), s.fs, s.startIndex + p.start, s.startIndex + p.end,
-      p.nperseg, p.segments, 'hann_periodic', Number($('overlap').value), processingLabel(), s.sessionLabel, s.label].map((v, j) => j <= s.channels.length + 5 ? String(v) : csvCell(v)).join(',')));
-    vscode.postMessage({ type: 'export', format: 'csv', name: `${s.subject}_${s.label}_PSD`, content: rows.join('\r\n') });
+      p.nperseg, p.segments, 'hann_periodic', p.overlap, processingLabel(state.psdContext.config), s.sessionLabel, state.psdContext.label,
+      state.psdContext.source, state.psdContext.eventId, p.method, p.finiteSamples, p.usedSamples].map((v, j) => j <= s.channels.length + 5 ? String(v) : csvCell(v)).join(',')));
+    vscode.postMessage({ type: 'export', format: 'csv', name: `${s.subject}_${state.psdContext.label}_PSD`, content: rows.join('\r\n') });
   });
   $('export-png').addEventListener('click', () => {
     if (!state.segment || !state.columns || !state.psd) return;
@@ -580,7 +699,7 @@
     ctx.font = `${10 * ratio}px sans-serif`; ctx.fillText(`EEG (${state.segment.unit}) · ${waveLabel} · ${processingLabel()}`, padding, 52 * ratio);
     ctx.drawImage(wave, padding, 65 * ratio); ctx.drawImage(psd, padding, wave.height + 95 * ratio);
     ctx.fillText($('psd-info').textContent, padding, output.height - 28 * ratio);
-    ctx.fillText(`PSD ${$('psd-scale').value === 'db' ? 'dB' : '线性'} · ${$('psd-source').selectedOptions[0].textContent}${state.pinned ? ` · 虚线 A: ${state.pinned.label}` : ''}`, padding, output.height - 12 * ratio);
+    ctx.fillText(`PSD ${$('psd-scale').value === 'db' ? 'dB' : '线性'} · ${state.psdContext.label} · ${state.psd.method === 'periodogram' ? '整段' : 'Welch 平均'}${state.pinned ? ` · 虚线 A: ${state.pinned.label}` : ''}`, padding, output.height - 12 * ratio);
     vscode.postMessage({ type: 'export', format: 'png', name: `${state.segment.subject}_${state.segment.label}_EEG_PSD`, content: output.toDataURL('image/png') });
   });
 
@@ -599,6 +718,6 @@
   });
   const observer = new ResizeObserver(() => { drawWave(); drawPSD(); }); observer.observe($('wave-wrap')); observer.observe($('psd-wrap'));
   new MutationObserver(() => { drawWave(); drawPSD(); }).observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
-  window.addEventListener('beforeunload', () => { worker?.terminate(); observer.disconnect(); });
+  window.addEventListener('beforeunload', () => { clearTimeout(waveClickTimer); worker?.terminate(); observer.disconnect(); });
   initWorker(); vscode.postMessage({ type: 'ready' });
 })();

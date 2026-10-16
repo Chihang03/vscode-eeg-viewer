@@ -266,16 +266,20 @@ async function loadSegment(dataset, sessionId, segmentId, cache) {
       label: `${row.stage_kind || ''} ${row.event.includes('_start_') ? 'start' : 'end'}${row.condition ? ` · ${row.condition}` : ''}`,
       source: '主机收包时间对齐驱动输出估算，未验证声学同步' }));
     for (const row of session.trials) {
-      try { const [a, b] = indexBounds(row.row, data.count); regions.push({ start: a, end: b, label: row.condition, targets: row.targets }); }
+      try { const [a, b] = indexBounds(row.row, data.count); regions.push({ id: row.id, start: a, end: b,
+        label: row.label, condition: row.condition, kind: 'stimulus', targets: row.targets, valid: row.valid }); }
       catch { /* 尚未呈现的 trial 保留在列表，但不绘制虚构的区间。 */ }
     }
     const stages = [];
     for (const row of boundaries.filter(r => r.event.includes('_start_') && ['baseline', 'rest'].includes(r.stage_kind))) {
-      const finish = boundaries.find(r => r.stage_index === row.stage_index && r.event.includes('_end_'));
+      if (!String(row.stage_index ?? '').trim()) continue;
+      const finish = boundaries.find(r => r.stage_index === row.stage_index && r.stage_kind === row.stage_kind && r.event.includes('_end_'));
       if (!finish || !data.stamps.length) continue;
-      stages.push({ id: `stage:${row.stage_index}`, kind: row.stage_kind,
-        start: bisectLeft(data.stamps, BigInt(row.estimated_output_monotonic_ns)),
-        end: bisectLeft(data.stamps, BigInt(finish.estimated_output_monotonic_ns)),
+      const stageStart = bisectLeft(data.stamps, BigInt(row.estimated_output_monotonic_ns));
+      const stageEnd = bisectLeft(data.stamps, BigInt(finish.estimated_output_monotonic_ns));
+      if (stageEnd <= stageStart) continue;
+      stages.push({ id: `stage:${row.stage_index}`, kind: row.stage_kind, targets: [], valid: true,
+        start: stageStart, end: stageEnd,
         label: row.stage_kind === 'baseline' ? 'Baseline' : `Rest · ${row.condition || row.trial_id || ''}` });
     }
     regions.push(...stages);
@@ -301,7 +305,8 @@ async function loadSegment(dataset, sessionId, segmentId, cache) {
     channels: info.channels, values: data.values.map(v => Array.from(v.subarray(start, end), x => Number.isFinite(x) ? x * info.scale : null)),
     sampleCount: end - start, startIndex: start, targets,
     events: events.filter(e => e.index >= start && e.index <= end).map(e => ({ ...e, index: e.index - start })),
-    regions: regions.filter(r => r.end > start && r.start < end).map(r => ({ ...r, start: Math.max(start, r.start) - start, end: Math.min(end, r.end) - start })),
+    regions: regions.filter(r => r.end > start && r.start < end).sort((a, b) => a.start - b.start || a.end - b.end)
+      .map(r => ({ ...r, start: Math.max(start, r.start) - start, end: Math.min(end, r.end) - start })),
     stages: session.stages || [], warnings,
     details: { samplingRate: `${info.fs} Hz（${info.samplingSource}；按记录配置构建样本时间轴）`,
       unitConversion: info.converted ? `raw_device_float × ${info.scale} → μV` : info.unit,

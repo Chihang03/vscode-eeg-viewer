@@ -41,6 +41,29 @@ test('单边 Welch 密度谱积分还原正弦功率，保留真实频率网格'
   assert.equal(p.frequencies[p.power[0].indexOf(Math.max(...p.power[0]))], 12);
 });
 
+test('默认整段周期图覆盖全部 trial，选区按实际样本长度建立频率网格', () => {
+  const fs = 500, x = Float64Array.from({ length: 5251 }, (_, i) => 20 + 7 * Math.sin(2 * Math.PI * 12 * i / fs));
+  const p = dsp.welch([x], fs);
+  assert.equal(p.method, 'periodogram'); assert.equal(p.nperseg, x.length); assert.equal(p.segments, 1);
+  assert.equal(p.binHz, fs / x.length); assert.equal(p.usedSamples, x.length); assert.equal(p.overlap, 0);
+  assert.ok(Math.abs(p.power[0].reduce((a, b) => a + b, 0) * p.binHz - 49 / 2) < 1e-4);
+  const selected = dsp.welch([x], fs, { start: 501, end: 4002, seconds: 'full' });
+  assert.equal(selected.nperseg, 3501); assert.equal(selected.usedSamples, 3501); assert.equal(selected.binHz, fs / 3501);
+  const exact = dsp.welch([x.slice(501, 4002)], fs);
+  assert.deepEqual(selected.power, exact.power);
+});
+
+test('完整窗缺口回退及 Welch 尾段如实报告实际参与样本，不拼接缺失区间', () => {
+  const x = Float64Array.from({ length: 100 }, (_, i) => Math.sin(i)); x.fill(NaN, 30, 40);
+  const p = dsp.welch([x], 100);
+  assert.equal(p.finiteSamples, 90); assert.equal(p.usedSamples, 60); assert.equal(p.nperseg, 60); assert.equal(p.segments, 1);
+  assert.ok(p.warnings.some(w => w.includes('实际参与 60 点')));
+  const long = Float64Array.from({ length: 5251 }, (_, i) => Math.sin(i));
+  const averaged = dsp.welch([long], 500, { seconds: 4 });
+  assert.equal(averaged.usedSamples, 5000); assert.equal(averaged.samples, 5251); assert.equal(averaged.method, 'welch');
+  assert.ok(averaged.warnings.some(w => w.includes('实际参与 5000 点')));
+});
+
 test('缺失段不拼接、不跨边界，联合缺失样本保持一致', () => {
   const x = Float64Array.from({ length: 100 }, (_, i) => Math.sin(i));
   const y = Float64Array.from(x); y.fill(NaN, 30, 40);

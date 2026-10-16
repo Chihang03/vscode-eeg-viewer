@@ -42,6 +42,7 @@
         </div>
         <section class="plot-card waveform-card">
           <div class="card-header"><div><h2>EEG 波形</h2><span id="wave-unit" class="pill">μV</span></div><div class="plot-actions"><button id="zoom-selection" disabled>放大选区</button><button id="zoom-in">＋</button><button id="zoom-out">−</button><button id="reset-view">全段</button><button id="clear-selection" disabled>清除选区</button></div></div>
+          <div id="event-strip" class="event-strip" role="group" aria-label="ASSR 事件" hidden></div>
           <div class="canvas-wrap" id="wave-wrap" data-view="average"><canvas id="wave" aria-label="EEG 波形"></canvas><div id="wave-tooltip" class="tooltip" hidden></div></div>
           <div class="wave-navigation"><button id="pan-left" aria-label="向前平移">‹</button><input id="pan" type="range" min="0" max="1000" value="0" aria-label="时间窗口位置"><button id="pan-right" aria-label="向后平移">›</button><span id="view-range"></span></div>
           <div class="plot-footer" id="selection-footer" hidden><span id="selection-label"></span></div>
@@ -49,12 +50,15 @@
         <section class="plot-card psd-card">
           <div class="card-header"><div><h2>PSD</h2><div id="channels" class="channels"></div></div><div class="plot-actions"><button id="reset-psd" disabled>全频段</button><button id="pin">固定为对照 A</button><button id="clear-pin" hidden>移除 A</button><button id="export-csv">导出 PSD</button></div></div>
           <div class="psd-toolbar">
-            <label>来源<select id="psd-source"><option value="segment">当前 trial / 阶段全段</option><option value="view">当前可见区间</option><option value="selection">框选区间</option></select></label>
-            <label>窗长<select id="window"><option value="2">2 s</option><option value="4" selected>4 s</option><option value="8">8 s</option><option value="full">全段</option></select></label>
-            <label>重叠<select id="overlap"><option value="0.5">50%</option><option value="0">0%</option><option value="0.75">75%</option></select></label>
+            <label>来源<select id="psd-source"><option value="segment">完整 trial</option><option id="source-event" value="event" disabled hidden>当前事件</option><option id="source-selection" value="selection" disabled>框选区间</option></select></label>
             <label>纵轴<select id="psd-scale"><option value="db">dB</option><option value="linear">线性</option></select></label>
+            <details class="psd-advanced"><summary>高级</summary><div>
+              <label>算法<select id="psd-method"><option value="full">整段</option><option value="welch">Welch 平均</option></select></label>
+              <label class="welch-control" hidden>窗长<select id="window"><option value="2">2 s</option><option value="4" selected>4 s</option><option value="8">8 s</option></select></label>
+              <label class="welch-control" hidden>重叠<select id="overlap"><option value="0.5">50%</option><option value="0">0%</option><option value="0.75">75%</option></select></label>
+            </div></details>
           </div>
-          <div class="canvas-wrap" id="psd-wrap"><canvas id="psd" aria-label="各通道 Welch PSD" title="滚轮缩放 · 拖动平移 · 双击恢复全频段"></canvas><div id="psd-tooltip" class="tooltip" hidden></div></div>
+          <div class="canvas-wrap" id="psd-wrap"><canvas id="psd" aria-label="各通道 PSD" title="滚轮缩放 · 拖动平移 · 双击恢复全频段"></canvas><div id="psd-tooltip" class="tooltip" hidden></div></div>
           <div class="plot-footer"><span id="psd-info">等待数据</span><span id="compute-status" role="status"></span></div>
           <div id="pin-info" class="pin-info" hidden></div>
         </section>

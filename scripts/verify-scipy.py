@@ -40,6 +40,18 @@ def samples(n: int, fs: float) -> np.ndarray:
 
 def main() -> None:
     fs = 500
+    x = samples(5001, fs)
+    for start, end in [(0, 5001), (321, 4322)]:
+        actual = run({"method": "welch", "columns": x.tolist(), "fs": fs,
+                      "options": {"start": start, "end": end}})
+        f, p = signal.periodogram(x[:, start:end], fs, window="hann", detrend="constant",
+                                  scaling="density", axis=-1)
+        np.testing.assert_allclose(actual["frequencies"], f, rtol=1e-13, atol=1e-12)
+        np.testing.assert_allclose(actual["power"], p, rtol=3e-7, atol=1e-11)
+        assert actual["usedSamples"] == end - start
+        assert actual["method"] == "periodogram" and actual["segments"] == 1
+        print(f"PASS default full-interval periodogram [{start}, {end}), all {len(f)} bins / 2 channels")
+
     for n, seconds in [(5000, 4), (4000, "full"), (1199, "full"), (2501, 8), (8192, 4)]:
         x = samples(n, fs)
         options = {"seconds": seconds, "overlap": 0.5}

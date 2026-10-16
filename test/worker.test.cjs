@@ -21,3 +21,18 @@ test('Worker 生成平均波形，同时保留各通道 PSD；视图平均不混
   assert.ok(result.psd.power[1][bin] > 0.1);
   assert.equal(result.psd.power[2][bin], 0);
 });
+
+test('Worker 默认使用完整分析区间，并将事件或选区上下文随计算结果返回', () => {
+  const results = [], scope = { EEGDSP: dsp, postMessage: message => results.push(message) };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../media/worker.js'), 'utf8'), { self: scope });
+  const values = [Array.from({ length: 5001 }, (_, i) => Math.sin(i * 0.1))];
+  const event = { source: 'event', label: 'AM12 · trial 1', eventId: 'trial:1', targets: [12] };
+  scope.onmessage({ data: { id: 1, type: 'load', source: { values, fs: 500 }, options: { start: 501, end: 4502 }, analysis: event } });
+  assert.equal(results[0].psd.method, 'periodogram'); assert.equal(results[0].psd.nperseg, 4001);
+  assert.equal(results[0].psd.usedSamples, 4001); assert.deepEqual(results[0].analysis, event);
+  const selection = { source: 'selection', label: '框选区间', eventId: '', targets: [] };
+  scope.onmessage({ data: { id: 2, type: 'compute', options: { start: 1001, end: 1502 }, analysis: selection } });
+  assert.equal(results[1].id, 2); assert.equal(results[1].psd.nperseg, 501);
+  assert.deepEqual(results[1].analysis, selection); assert.deepEqual(results[0].analysis, event);
+  assert.strictEqual(results[0].columns, results[1].columns, '切换分析范围复用完整处理后的记录');
+});

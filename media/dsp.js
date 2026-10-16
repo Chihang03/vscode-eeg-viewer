@@ -83,21 +83,25 @@
     if (end <= start) throw new Error('PSD 选区为空');
     const spans = finiteSpans(columns, start, end);
     const longest = spans.reduce((max, [a, b]) => Math.max(max, b - a), 0);
-    const requested = options.seconds === 'full' ? end - start : Math.round(Number(options.seconds ?? 4) * fs);
+    const full = options.seconds === undefined || options.seconds === 'full';
+    const requested = full ? end - start : Math.round(Number(options.seconds) * fs);
     if (!(requested > 0)) throw new Error('PSD 窗长无效');
     const n = Math.min(requested, longest), overlap = Number(options.overlap ?? 0.5);
     if (!(overlap >= 0 && overlap < 1)) throw new Error('重叠比例必须在 [0, 1)');
     const result = { frequencies: [], power: columns.map(() => []), segments: 0, nperseg: n,
       binHz: n ? fs / n : null, windowSeconds: n / fs, start, end, samples: end - start,
-      finiteSamples: spans.reduce((sum, [a, b]) => sum + b - a, 0), warnings: [] };
+      finiteSamples: spans.reduce((sum, [a, b]) => sum + b - a, 0), usedSamples: 0,
+      method: full ? 'periodogram' : 'welch', overlap: full ? 0 : overlap, warnings: [] };
     if (n < 16) { result.warnings.push('连续有效样本不足 16 点，无法计算 PSD。'); return result; }
     if (n < requested) result.warnings.push(`可用连续片段不足请求窗长，实际使用 ${(n / fs).toFixed(3)} s。`);
-    const hop = n - Math.min(n - 1, Math.round(n * overlap));
+    const hop = n - Math.min(n - 1, Math.round(n * result.overlap));
     const bins = Math.floor(n / 2) + 1, window = new Float64Array(n);
     let windowEnergy = 0;
     for (let i = 0; i < n; i++) { window[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / n); windowEnergy += window[i] ** 2; }
     const power = columns.map(() => new Float64Array(bins)), frame = new Float64Array(n);
     for (const [a, b] of spans) {
+      const count = b - a < n ? 0 : 1 + Math.floor((b - a - n) / hop);
+      if (count) result.usedSamples += n + (count - 1) * hop;
       for (let offset = a; offset + n <= b; offset += hop) {
         for (let c = 0; c < columns.length; c++) {
           let mean = 0; for (let i = 0; i < n; i++) mean += columns[c][offset + i]; mean /= n;
@@ -113,6 +117,7 @@
     }
     result.frequencies = Array.from({ length: bins }, (_, k) => k * fs / n);
     result.power = power.map(p => Array.from(p, v => v / result.segments));
+    if (result.usedSamples < result.samples) result.warnings.push(`分析范围 ${result.samples} 点，实际参与 ${result.usedSamples} 点；缺失段不跨越，未覆盖样本不参与频谱。`);
     return result;
   }
 
