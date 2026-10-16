@@ -2,7 +2,7 @@
   "name": "kieran-eeg-viewer",
   "displayName": "Kieran EEG Viewer（脑电查看器）",
   "description": "SSVEP 与 ASSR 脑电波形、trial 导航与联动 PSD。",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "chihang03",
   "author": {
     "name": "Kieran Dai"
