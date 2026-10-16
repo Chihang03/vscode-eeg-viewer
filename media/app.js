@@ -23,11 +23,15 @@
     notice(messages.slice(0, 5).join('\n') + (messages.length > 5 ? `\n另有 ${messages.length - 5} 条导入提示。` : ''));
   }
   function config() {
-    return { filter: $('signal-mode').value === 'filtered', notch: $('notch').checked,
-      highpass: Number($('highpass').value), lowpass: Number($('lowpass').value) };
+    const kind = $('signal-mode').value;
+    return { filter: kind !== 'raw', filterKind: kind === 'ssvep' ? 'ssvep' : 'generic', notch: kind !== 'ssvep' && $('notch').checked,
+      highpass: Number($('highpass').value), lowpass: Number($('lowpass').value),
+      units: $('signal-units').value, missing: $('missing').value };
   }
+  function signalUnit() { return $('signal-units').value === 'raw' ? state.segment?.rawUnit || state.segment?.unit : state.segment?.unit; }
   function processingLabel(c = config()) {
-    return `${c.filter ? `2阶高通 ${c.highpass} Hz + 2阶低通 ${c.lowpass} Hz，前后向零相位` : '原始信号'}${c.notch ? ' + 50 Hz Q30 零相位陷波' : ''}`;
+    const filter = c.filterKind === 'ssvep' && c.filter ? 'FIR（801 taps）6–35 Hz Hamming + 50/60/100 Hz Q12.5 双节陷波，前后向零相位' : c.filter ? `2阶高通 ${c.highpass} Hz + 2阶低通 ${c.lowpass} Hz，前后向零相位` : '原始信号';
+    return `${filter}${c.notch ? ' + 50 Hz Q30 零相位陷波' : ''}${c.missing === 'interpolate' ? ' · 缺失点线性插值' : ''}`;
   }
   function analysisRange() {
     if ($('psd-source').value === 'selection' && state.selection) return state.selection.map(t => Math.round(t * state.segment.fs));
@@ -36,7 +40,7 @@
   }
   function analysisOptions() {
     const [start, end] = analysisRange(), full = $('psd-method').value === 'full';
-    return { start, end, seconds: full ? 'full' : Number($('window').value), overlap: full ? 0 : Number($('overlap').value) };
+    return { start, end, seconds: full ? 'full' : Number($('window').value), overlap: full ? 0 : Number($('overlap').value), fft: 'script' };
   }
   function analysisContext() {
     const source = $('psd-source').value, [start, end] = analysisRange();
@@ -44,7 +48,7 @@
     const targets = state.segment.profile === 'assr'
       ? [...new Set(state.segment.regions.filter(r => r.end > start && r.start < end).flatMap(r => r.targets || []))]
       : state.segment.targets;
-    return { source, label, eventId: source === 'event' ? state.event.id : '', targets, config: config() };
+    return { source, label, eventId: source === 'event' ? state.event.id : '', targets, config: config(), unit: signalUnit() };
   }
 
   async function initWorker() {
@@ -66,7 +70,7 @@
         state.filterWarnings = message.warnings || [];
         $('workspace').dataset.state = 'ready'; text('compute-status', '');
         const p = state.psd, start = p.start / state.segment.fs, end = p.end / state.segment.fs;
-        text('psd-info', `${state.psdContext.label} · ${format(start, 3)}–${format(end, 3)} s · ${format(end - start, 3)} s · Δf ${format(p.binHz, 4)} Hz${p.method === 'welch' ? ` · ${p.segments} 窗` : ''}${p.usedSamples < p.samples ? ` · 有效 ${format(p.usedSamples / state.segment.fs, 3)} s` : ''}`);
+        text('psd-info', `${state.psdContext.label} · ${format(start, 3)}–${format(end, 3)} s · ${format(end - start, 3)} s · 窗 ${format(p.windowSeconds, 3)} s · Δf ${format(p.binHz, 4)} Hz · FFT ${p.nfft}${p.method === 'welch' ? ` · ${p.segments} 窗` : ''}${p.usedSamples < p.samples ? ` · 有效 ${format(p.usedSamples / state.segment.fs, 3)} s` : ''}`);
         $('export-png').disabled = !state.columns; $('export-csv').disabled = !p.segments; $('pin').disabled = !p.segments;
         drawWave(); drawPSD(); updateWarnings();
       };
@@ -93,7 +97,7 @@
       if (id !== state.computation || segment !== state.segment) return;
       const needsLoad = load || state.workerSource !== segment;
       worker.postMessage({ id, type: needsLoad ? 'load' : 'compute',
-        ...(needsLoad ? { source: { values: segment.values, fs: segment.fs } } : {}), config: settings, options, analysis });
+        ...(needsLoad ? { source: { values: segment.values, fs: segment.fs, scale: segment.scale } } : {}), config: settings, options, analysis });
       state.workerSource = segment;
     } catch (error) { if (id === state.computation) computationError(error.message); }
   }
@@ -207,16 +211,16 @@
     state.segment = segment; state.selection = null; state.event = null;
     state.view = [0, duration()];
     if (segment.stages?.length) state.session.stages = segment.stages;
-    state.shown = new Set(segment.channels);
+    state.shown = new Set([...segment.channels, '三通道平均']);
     $('psd-source').value = 'segment';
     $('psd-source').options[0].textContent = segment.profile === 'assr' ? '完整记录' : '完整 trial';
     $('source-event').hidden = segment.profile !== 'assr';
     buildTimeline();
     text('record-title', segment.label); text('record-subtitle', `${segment.sessionLabel} · ${segment.sampleCount.toLocaleString()} 样本 · ${format(duration(), 3)} s`);
-    text('wave-unit', segment.unit);
+    text('wave-unit', signalUnit());
     const channels = $('channels'); channels.replaceChildren();
-    segment.channels.forEach((channel, index) => {
-      const label = document.createElement('label'); label.className = `checkbox channel-label channel-${index % 3}`;
+    [...segment.channels, '三通道平均'].forEach((channel, index) => {
+      const label = document.createElement('label'); label.className = `checkbox channel-label`; label.style.color = COLORS[index % COLORS.length];
       const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = true; checkbox.setAttribute('aria-label', `显示 ${channel}`);
       checkbox.addEventListener('change', () => {
         if (checkbox.checked) state.shown.add(channel); else state.shown.delete(channel);
@@ -437,18 +441,21 @@
     }
     return points;
   }
-  function compatiblePin() { return state.pinned && state.segment && state.pinned.unit === state.segment.unit; }
+  function spectrumNames() { return [...state.segment.channels, '三通道平均']; }
+  function spectrumPower(psd) { return [...psd.power, psd.averagePower]; }
+  function spectrumIndices() { return spectrumNames().map((c, i) => state.shown.has(c) ? i : -1).filter(i => i >= 0); }
+  function compatiblePin() { return state.pinned && state.segment && state.pinned.unit === signalUnit(); }
   function drawPSD() {
     const p = prepareCanvas('psd'), { ctx, left, right, top, bottom, muted, border } = p;
     $('reset-psd').disabled = !state.psd?.segments;
     if (!state.psd?.segments || !state.segment) { canvasEmpty(p, state.psdError || (state.psd ? state.psd.warnings.join(' ') : '等待频谱计算…')); return; }
-    const [minF, maxF] = frequencyBounds(), logarithmic = $('psd-scale').value === 'db', indices = shownIndices();
-    p.canvas.setAttribute('aria-label', `各通道 PSD，${format(minF, 4)}–${format(maxF, 4)} Hz`);
-    const convert = y => logarithmic ? 10 * Math.log10(Math.max(1e-30, y)) : y;
-    const curves = indices.map(c => ({ f: state.psd.frequencies, p: state.psd.power[c], color: COLORS[c % COLORS.length], dash: [] }));
+    const [minF, maxF] = frequencyBounds(), logarithmic = $('psd-scale').value === 'db', indices = spectrumIndices();
+    p.canvas.setAttribute('aria-label', `PSD，${format(minF, 4)}–${format(maxF, 4)} Hz`);
+    const convert = y => logarithmic ? 10 * Math.log10(Math.max(2 ** -1022, y)) : y;
+    const curves = indices.map(c => ({ f: state.psd.frequencies, p: spectrumPower(state.psd)[c], color: COLORS[c % COLORS.length], dash: [] }));
     if (compatiblePin()) for (const c of indices) {
-      const pinIndex = state.pinned.channels.indexOf(state.segment.channels[c]);
-      if (pinIndex >= 0) curves.push({ f: state.pinned.psd.frequencies, p: state.pinned.psd.power[pinIndex], color: COLORS[c % COLORS.length], dash: [5, 4] });
+      const pinIndex = state.pinned.channels.indexOf(spectrumNames()[c]);
+      if (pinIndex >= 0) curves.push({ f: state.pinned.psd.frequencies, p: spectrumPower(state.pinned.psd)[pinIndex], color: COLORS[c % COLORS.length], dash: [5, 4] });
     }
     let minY = Infinity, maxY = -Infinity;
     for (const curve of curves) {
@@ -469,7 +476,7 @@
       const screen = bottom - (y - minY) / (maxY - minY) * (bottom - top); line(ctx, left, screen, right, screen, border);
       ctx.fillStyle = muted; ctx.textAlign = 'right'; ctx.fillText(logarithmic ? format(y, 0) : y.toExponential(1), left - 8, screen + 3);
     }
-    const unit = state.segment.unit === 'μV' ? 'μV²/Hz' : `${state.segment.unit}²/Hz`;
+    const unit = signalUnit() === 'μV' ? 'μV²/Hz' : `${signalUnit()}²/Hz`;
     ctx.fillStyle = muted; ctx.textAlign = 'left'; ctx.fillText(logarithmic ? `dB re 1 ${unit}` : unit, 10, 12);
     const markers = [];
     for (const frequency of state.psdContext?.targets || []) for (let harmonic = 1; harmonic <= 3; harmonic++) {
@@ -606,8 +613,8 @@
     if (state.dragging) { const end = selectionTime(event); state.selection = [Math.min(state.dragging.t, end), Math.max(state.dragging.t, end)]; updateView(); return; }
     const index = Math.max(0, Math.min(state.segment.sampleCount - 1, Math.round(t * state.segment.fs)));
     const values = $('wave-mode').value === 'average'
-      ? [`平均  ${format(state.average[index], 3)} ${state.segment.unit}`]
-      : shownIndices().map(c => `${state.segment.channels[c]}  ${format(state.columns[c][index], 3)} ${state.segment.unit}`);
+      ? [`平均  ${format(state.average[index], 3)} ${signalUnit()}`]
+      : shownIndices().map(c => `${state.segment.channels[c]}  ${format(state.columns[c][index], 3)} ${signalUnit()}`);
     tooltip('wave-tooltip', event, [`${format(index / state.segment.fs, 3)} s`, ...values].join('\n'));
   });
   function finishSelection(event) {
@@ -660,9 +667,9 @@
     }
     const [a, b] = frequencyBounds(), f = a + psdPointer(event).fraction * (b - a);
     const i = Math.max(0, Math.min(state.psd.frequencies.length - 1, Math.round(f / state.psd.binHz)));
-    const logarithmic = $('psd-scale').value === 'db', unit = state.segment.unit === 'μV' ? 'μV²/Hz' : `${state.segment.unit}²/Hz`;
-    tooltip('psd-tooltip', event, [`${format(state.psd.frequencies[i], 4)} Hz`, ...shownIndices().map(c => {
-      const value = state.psd.power[c][i]; return `${state.segment.channels[c]}  ${logarithmic ? format(10 * Math.log10(Math.max(1e-30, value)), 2) + ' dB' : value.toExponential(4) + ' ' + unit}`;
+    const logarithmic = $('psd-scale').value === 'db', unit = signalUnit() === 'μV' ? 'μV²/Hz' : `${signalUnit()}²/Hz`;
+    tooltip('psd-tooltip', event, [`${format(state.psd.frequencies[i], 4)} Hz`, ...spectrumIndices().map(c => {
+      const value = spectrumPower(state.psd)[c][i]; return `${spectrumNames()[c]}  ${logarithmic ? format(10 * Math.log10(Math.max(2 ** -1022, value)), 2) + ' dB' : value.toExponential(4) + ' ' + unit}`;
     })].join('\n'));
   });
   for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) $('psd').addEventListener(event, finishPSDPan);
@@ -692,8 +699,10 @@
     }
     if (event.key === 'Escape' && (state.selection || state.event)) clearSelection();
   });
-  for (const id of ['signal-mode', 'notch', 'highpass', 'lowpass']) $(id).addEventListener('change', () => {
+  for (const id of ['signal-mode', 'notch', 'highpass', 'lowpass', 'signal-units', 'missing']) $(id).addEventListener('change', () => {
     document.querySelector('.filter-control').hidden = $('signal-mode').value !== 'filtered';
+    $('notch-control').hidden = $('signal-mode').value === 'ssvep';
+    text('wave-unit', signalUnit()); updatePinInfo();
     if ($('processing-detail')) text('processing-detail', processingLabel());
     state.columns = null; updateView(); calculate();
   });
@@ -729,7 +738,7 @@
   $('pin').addEventListener('click', () => {
     if (!state.psd?.segments) return;
     state.pinned = { psd: state.psd, label: state.psdContext.label, sessionLabel: state.segment.sessionLabel,
-      unit: state.segment.unit, channels: [...state.segment.channels], config: state.psdContext.config };
+      unit: state.psdContext.unit, channels: spectrumNames(), config: state.psdContext.config };
     updatePinInfo(); drawPSD();
   });
   $('clear-pin').addEventListener('click', () => { state.pinned = null; updatePinInfo(); drawPSD(); });
@@ -740,14 +749,14 @@
   $('export-csv').addEventListener('click', () => {
     if (!state.psd?.segments) return;
     const p = state.psd, s = state.segment;
-    const unit = s.unit === 'μV' ? 'uV2_per_Hz' : `${s.unit}2_per_Hz`;
-    const header = ['frequency_hz', ...s.channels.map(c => `${c}_PSD_${unit}`), 'fs_hz', 'source_start_index', 'source_end_index',
+    const unit = state.psdContext.unit === 'μV' ? 'uV2_per_Hz' : `${state.psdContext.unit}2_per_Hz`;
+    const header = ['frequency_hz', ...spectrumNames().map(c => `${c}_PSD_${unit}`), 'fs_hz', 'source_start_index', 'source_end_index',
       'nperseg', 'averaged_segments', 'window', 'overlap_fraction', 'processing', 'session', 'segment',
-      'analysis_source', 'event_id', 'method', 'finite_samples', 'used_samples'];
+      'analysis_source', 'event_id', 'method', 'finite_samples', 'used_samples', 'nfft', 'noverlap', 'frequency_bin_hz', 'window_inverse_seconds_hz', 'signal_unit', 'missing_policy'];
     const rows = [header.map(csvCell).join(',')];
-    p.frequencies.forEach((f, i) => rows.push([f, ...p.power.map(c => c[i]), s.fs, s.startIndex + p.start, s.startIndex + p.end,
+    p.frequencies.forEach((f, i) => rows.push([f, ...spectrumPower(p).map(c => c[i]), s.fs, s.startIndex + p.start, s.startIndex + p.end,
       p.nperseg, p.segments, 'hann_periodic', p.overlap, processingLabel(state.psdContext.config), s.sessionLabel, state.psdContext.label,
-      state.psdContext.source, state.psdContext.eventId, p.method, p.finiteSamples, p.usedSamples].map((v, j) => j <= s.channels.length + 5 ? String(v) : csvCell(v)).join(',')));
+      state.psdContext.source, state.psdContext.eventId, p.method, p.finiteSamples, p.usedSamples, p.nfft, p.noverlap, p.binHz, p.resolutionHz, state.psdContext.unit, state.psdContext.config.missing].map(v => typeof v === 'number' ? String(v) : csvCell(v)).join(',')));
     vscode.postMessage({ type: 'export', format: 'csv', name: `${s.subject}_${state.psdContext.label}_PSD`, content: rows.join('\r\n') });
   });
   $('export-png').addEventListener('click', () => {
@@ -759,7 +768,7 @@
     ctx.fillStyle = getComputedStyle(document.body).color; ctx.font = `${16 * ratio}px sans-serif`;
     ctx.fillText(`${state.segment.sessionLabel} / ${state.segment.label}`, padding, 30 * ratio);
     const waveLabel = $('wave-mode').value === 'average' ? '三通道平均 (1:1:1)' : '分别显示';
-    ctx.font = `${10 * ratio}px sans-serif`; ctx.fillText(`EEG (${state.segment.unit}) · ${waveLabel} · ${processingLabel()}`, padding, 52 * ratio);
+    ctx.font = `${10 * ratio}px sans-serif`; ctx.fillText(`EEG (${signalUnit()}) · ${waveLabel} · ${processingLabel()}`, padding, 52 * ratio);
     ctx.drawImage(wave, padding, 65 * ratio); ctx.drawImage(psd, padding, wave.height + 95 * ratio);
     ctx.fillText($('psd-info').textContent, padding, output.height - 28 * ratio);
     ctx.fillText(`PSD ${$('psd-scale').value === 'db' ? 'dB' : '线性'} · ${state.psdContext.label} · ${state.psd.method === 'periodogram' ? '整段' : 'Welch 平均'}${state.pinned ? ` · 虚线 A: ${state.pinned.label}` : ''}`, padding, output.height - 12 * ratio);

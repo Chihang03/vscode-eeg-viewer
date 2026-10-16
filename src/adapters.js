@@ -298,10 +298,11 @@ async function loadSegment(dataset, sessionId, segmentId, cache) {
     session.stages = stages;
   }
   if (!info.converted) warnings.push('未找到可确认的 μV 换算，保持原始信号单位。');
-  if (data.invalid) warnings.push(`完整文件含 ${data.invalid} 个非有限通道值，波形保留缺口，PSD 不跨缺口。`);
+  if (data.invalid) warnings.push(`完整文件含 ${data.invalid} 个非有限通道值。`);
   if (trial && !trial.valid) warnings.push(`采集标记无效：${trial.reason || trial.status || '未说明原因'}`);
   return { id: trial?.id || segmentId, sessionId, profile: session.profile, label,
     sessionLabel: session.label, subject: session.subject, fs: info.fs, unit: info.unit,
+    scale: info.scale, rawUnit: String(meta.device?.signal_unit || '原始单位'),
     channels: info.channels, values: data.values.map(v => Array.from(v.subarray(start, end), x => Number.isFinite(x) ? x * info.scale : null)),
     sampleCount: end - start, startIndex: start, targets,
     events: events.filter(e => e.index >= start && e.index <= end).map(e => ({ ...e, index: e.index - start })),

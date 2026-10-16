@@ -84,21 +84,25 @@
     const spans = finiteSpans(columns, start, end);
     const longest = spans.reduce((max, [a, b]) => Math.max(max, b - a), 0);
     const full = options.seconds === undefined || options.seconds === 'full';
-    const requested = full ? end - start : Math.round(Number(options.seconds) * fs);
+    const rounded = value => { const floor = Math.floor(value); return value - floor === 0.5 ? floor + (floor % 2) : Math.round(value); };
+    const requested = full ? end - start : rounded(Number(options.seconds) * fs);
     if (!(requested > 0)) throw new Error('PSD 窗长无效');
     const n = Math.min(requested, longest), overlap = Number(options.overlap ?? 0.5);
     if (!(overlap >= 0 && overlap < 1)) throw new Error('重叠比例必须在 [0, 1)');
-    const result = { frequencies: [], power: columns.map(() => []), segments: 0, nperseg: n,
-      binHz: n ? fs / n : null, windowSeconds: n / fs, start, end, samples: end - start,
+    const nfft = options.fft === 'script' ? Math.max(4096, 2 ** Math.ceil(Math.log2(Math.max(n, 8)))) : n;
+    const noverlap = full ? 0 : Math.max(0, Math.min(n - 1, rounded(n * overlap)));
+    const result = { frequencies: [], power: columns.map(() => []), segments: 0, nperseg: n, nfft, noverlap,
+      binHz: nfft ? fs / nfft : null, resolutionHz: n ? fs / n : null, windowSeconds: n / fs, start, end, samples: end - start,
       finiteSamples: spans.reduce((sum, [a, b]) => sum + b - a, 0), usedSamples: 0,
-      method: full ? 'periodogram' : 'welch', overlap: full ? 0 : overlap, warnings: [] };
-    if (n < 16) { result.warnings.push('连续有效样本不足 16 点，无法计算 PSD。'); return result; }
+      method: full ? 'periodogram' : 'welch', overlap: n ? noverlap / n : 0, warnings: [] };
+    const minimum = options.fft === 'script' ? (full ? 1 : 8) : 16;
+    if (n < minimum) { result.warnings.push(`连续有效样本不足 ${minimum} 点，无法计算 PSD。`); return result; }
     if (n < requested) result.warnings.push(`可用连续片段不足请求窗长，实际使用 ${(n / fs).toFixed(3)} s。`);
-    const hop = n - Math.min(n - 1, Math.round(n * result.overlap));
-    const bins = Math.floor(n / 2) + 1, window = new Float64Array(n);
+    const hop = n - noverlap;
+    const bins = Math.floor(nfft / 2) + 1, window = new Float64Array(n);
     let windowEnergy = 0;
-    for (let i = 0; i < n; i++) { window[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / n); windowEnergy += window[i] ** 2; }
-    const power = columns.map(() => new Float64Array(bins)), frame = new Float64Array(n);
+    for (let i = 0; i < n; i++) { window[i] = n === 1 ? 1 : 0.5 - 0.5 * Math.cos(2 * Math.PI * i / n); windowEnergy += window[i] ** 2; }
+    const power = columns.map(() => new Float64Array(bins)), frame = new Float64Array(nfft);
     for (const [a, b] of spans) {
       const count = b - a < n ? 0 : 1 + Math.floor((b - a - n) / hop);
       if (count) result.usedSamples += n + (count - 1) * hop;
@@ -108,14 +112,14 @@
           for (let i = 0; i < n; i++) frame[i] = (columns[c][offset + i] - mean) * window[i];
           const { re, im } = fftReal(frame);
           for (let k = 0; k < bins; k++) {
-            const fold = k === 0 || (n % 2 === 0 && k === n / 2) ? 1 : 2;
+            const fold = k === 0 || (nfft % 2 === 0 && k === nfft / 2) ? 1 : 2;
             power[c][k] += fold * (re[k] ** 2 + im[k] ** 2) / (fs * windowEnergy);
           }
         }
         result.segments++;
       }
     }
-    result.frequencies = Array.from({ length: bins }, (_, k) => k * fs / n);
+    result.frequencies = Array.from({ length: bins }, (_, k) => k * fs / nfft);
     result.power = power.map(p => Array.from(p, v => v / result.segments));
     if (result.usedSamples < result.samples) result.warnings.push(`分析范围 ${result.samples} 点，实际参与 ${result.usedSamples} 点；缺失段不跨越，未覆盖样本不参与频谱。`);
     return result;
@@ -149,10 +153,10 @@
     return current;
   }
 
-  function sosFiltFilt(input, sos) {
+  function sosFiltFilt(input, sos, padlen) {
     if (!sos.length) return Float64Array.from(input);
     const zerosB = sos.filter(s => s[2] === 0).length, zerosA = sos.filter(s => s[5] === 0).length;
-    const pad = 3 * (2 * sos.length + 1 - Math.min(zerosB, zerosA));
+    const pad = padlen ?? 3 * (2 * sos.length + 1 - Math.min(zerosB, zerosA));
     if (input.length <= pad) throw new Error(`零相位滤波至少需要 ${pad + 1} 个连续样本`);
     const extended = new Float64Array(input.length + 2 * pad);
     extended.set(input, pad);
@@ -165,20 +169,84 @@
     return backward.slice(pad, pad + input.length);
   }
 
+  function ssvepFIR(fs) {
+    if (!(fs > 70)) throw new Error('SSVEP 6–35 Hz 滤波要求采样率大于 70 Hz');
+    const taps = new Float64Array(801), center = 400, low = 6 / fs, high = 35 / fs;
+    let scale = 0;
+    for (let i = 0; i < taps.length; i++) {
+      const t = i - center;
+      taps[i] = (t ? (Math.sin(2 * Math.PI * high * t) - Math.sin(2 * Math.PI * low * t)) / (Math.PI * t) : 2 * (high - low))
+        * (0.54 - 0.46 * Math.cos(2 * Math.PI * i / 800));
+      scale += taps[i] * Math.cos(Math.PI * (low + high) * t);
+    }
+    return Float64Array.from(taps, b => b / scale);
+  }
+
+  function firPass(input, taps) {
+    // 分块 FFT 线性卷积，避免长记录逐点执行 801 阶直接卷积。
+    const size = 8192, block = size - taps.length + 1;
+    const kr = new Float64Array(size), ki = new Float64Array(size); kr.set(taps); fftRadix2(kr, ki);
+    const output = new Float64Array(input.length), re = new Float64Array(size), im = new Float64Array(size);
+    for (let a = 0; a < input.length; a += block) {
+      const count = Math.min(block, input.length - a); re.fill(0); im.fill(0); re.set(input.subarray(a, a + count)); fftRadix2(re, im);
+      for (let k = 0; k < size; k++) { const r = re[k] * kr[k] - im[k] * ki[k]; im[k] = re[k] * ki[k] + im[k] * kr[k]; re[k] = r; }
+      fftRadix2(re, im, true);
+      for (let k = 0; k < Math.min(count + taps.length - 1, input.length - a); k++) output[a + k] += re[k];
+    }
+    // 与 scipy.signal.lfilter_zi 的 FIR 稳态初值一致。
+    let tail = 0;
+    for (let i = taps.length - 1; i > 0; i--) { tail += taps[i]; if (i - 1 < output.length) output[i - 1] += tail * input[0]; }
+    return output;
+  }
+
+  function ssvepFilter(input, fs, taps = ssvepFIR(fs)) {
+    if (input.length < 2) return Float64Array.from(input);
+    const sos = [50, 60, 100].filter(f => f < fs / 2).flatMap(f => [notch(fs, f, 12.5), notch(fs, f, 12.5)]);
+    const notched = sosFiltFilt(input, sos, Math.min(3 * (2 * sos.length + 1), input.length - 1));
+    const pad = Math.min(3 * taps.length, input.length - 1), extended = new Float64Array(input.length + 2 * pad);
+    extended.set(notched, pad);
+    for (let i = 0; i < pad; i++) {
+      extended[i] = 2 * notched[0] - notched[pad - i];
+      extended[pad + input.length + i] = 2 * notched[notched.length - 1] - notched[notched.length - 2 - i];
+    }
+    const forward = firPass(extended, taps); forward.reverse();
+    const backward = firPass(forward, taps); backward.reverse();
+    const result = backward.slice(pad, pad + input.length), mean = result.reduce((a, b) => a + b, 0) / result.length;
+    return Float64Array.from(result, v => v - mean);
+  }
+
+  function interpolate(column) {
+    let first = column.findIndex(Number.isFinite), count = 0;
+    if (first < 0) throw new Error('通道没有有效样本，无法插值');
+    for (let i = 0; i < first; i++) { column[i] = column[first]; count++; }
+    for (let left = first, i = first + 1; i < column.length; i++) {
+      if (!Number.isFinite(column[i])) continue;
+      for (let j = left + 1; j < i; j++) { column[j] = column[left] + (column[i] - column[left]) * (j - left) / (i - left); count++; }
+      left = i; first = i;
+    }
+    for (let i = first + 1; i < column.length; i++) { column[i] = column[first]; count++; }
+    return count;
+  }
+
   function process(columns, fs, config = {}) {
     const converted = columns.map(c => Float64Array.from(c, v => v === null ? NaN : Number(v)));
     const sos = [], warnings = [];
-    if (config.filter) {
+    if (config.missing === 'interpolate') {
+      const count = converted.reduce((sum, column) => sum + interpolate(column), 0);
+      if (count) warnings.push(`已按通道线性插值 ${count} 个缺失值，边缘使用最近有效值。`);
+    }
+    if (config.filter && config.filterKind !== 'ssvep') {
       const low = Number(config.highpass ?? 0.5), high = Number(config.lowpass ?? 60);
       if (!(low > 0 && high > low && high < fs / 2)) throw new Error('带通范围必须满足 0 < 下限 < 上限 < 采样率/2');
       sos.push(butter2(fs, low, true), butter2(fs, high, false));
     }
-    if (config.notch) sos.push(notch(fs));
-    if (sos.length) {
+    if (config.notch && config.filterKind !== 'ssvep') sos.push(notch(fs));
+    const taps = config.filter && config.filterKind === 'ssvep' ? ssvepFIR(fs) : null;
+    if (sos.length || taps) {
       let omitted = 0;
       for (const column of converted) {
         for (const [a, b] of finiteSpans([column])) {
-          try { column.set(sosFiltFilt(column.subarray(a, b), sos), a); }
+          try { column.set(taps ? ssvepFilter(column.subarray(a, b), fs, taps) : sosFiltFilt(column.subarray(a, b), sos), a); }
           catch { column.fill(NaN, a, b); omitted++; }
         }
       }
@@ -208,5 +276,5 @@
     return output;
   }
 
-  return { fftReal, welch, finiteSpans, butter2, notch, sosFiltFilt, process, weightedAverage };
+  return { fftReal, welch, finiteSpans, butter2, notch, sosFiltFilt, ssvepFIR, ssvepFilter, process, weightedAverage };
 });

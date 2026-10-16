@@ -98,3 +98,28 @@ test('滤波保留缺口，拒绝超 Nyquist 参数，短段不冒充滤波结�
   assert.throws(() => dsp.process([x], 100, { notch: true }), /陷波/);
   assert.throws(() => dsp.process([x], 500, { filter: true, lowpass: 300 }), /带通/);
 });
+
+test('脚本 FFT 规则补零但保持窗能量归一化和实际窗长，Welch 使用半偶舍入', () => {
+  const x = Float64Array.from({ length: 5000 }, (_, i) => 3 * Math.sin(2 * Math.PI * 12 * i / 500));
+  const p = dsp.welch([x], 500, { seconds: 2, fft: 'script' });
+  assert.equal(p.nperseg, 1000); assert.equal(p.noverlap, 500); assert.equal(p.nfft, 4096); assert.equal(p.segments, 9);
+  assert.equal(p.binHz, 500 / 4096); assert.equal(p.resolutionHz, 0.5);
+  assert.ok(Math.abs(p.power[0].reduce((sum, v) => sum + v, 0) * p.binHz - 4.5) < 1e-9);
+  const full = dsp.welch([x], 500, { fft: 'script' });
+  assert.equal(full.nperseg, 5000); assert.equal(full.nfft, 8192); assert.equal(full.noverlap, 0);
+  assert.equal(full.usedSamples, 5000); assert.equal(full.segments, 1);
+  const odd = dsp.welch([x.slice(0, 1001)], 500, { seconds: 4, fft: 'script' });
+  assert.equal(odd.noverlap, 500); assert.equal(odd.overlap, 500 / 1001);
+  assert.equal(dsp.welch([x.slice(0, 8)], 500, { fft: 'script' }).segments, 1);
+  assert.equal(dsp.welch([x.slice(0, 7)], 500, { seconds: 2, fft: 'script' }).segments, 0);
+  assert.equal(dsp.welch([x.slice(0, 2)], 500, { fft: 'script' }).segments, 1);
+});
+
+test('缺失点插值为显式选项，边缘延拓，不修改输入或静默填补整条缺失通道', () => {
+  const x = [null, 2, null, null, 8, NaN];
+  assert.deepEqual(Array.from(dsp.process([x], 500, { missing: 'interpolate' }).columns[0]), [2, 2, 4, 6, 8, 8]);
+  assert.equal(x[0], null); assert.ok(Number.isNaN(x[5]));
+  assert.ok(Number.isNaN(dsp.process([x], 500).columns[0][0]));
+  assert.throws(() => dsp.process([[null, NaN]], 500, { missing: 'interpolate' }), /没有有效样本/);
+  assert.throws(() => dsp.process([[1, 2]], 60, { filter: true, filterKind: 'ssvep' }), /大于 70/);
+});
