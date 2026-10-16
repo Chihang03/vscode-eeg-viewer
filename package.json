@@ -2,7 +2,7 @@
   "name": "kieran-eeg-viewer",
   "displayName": "Kieran EEG Viewer（脑电查看器）",
   "description": "SSVEP 与 ASSR 脑电波形、trial 导航与联动 PSD。",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "publisher": "chihang03",
   "author": {
     "name": "Kieran Dai"
@@ -113,7 +113,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.cjs",
-    "check": "node --check src/extension.js && node --check src/adapters.js && node --check media/dsp.js && node --check media/app.js && node --check media/worker.js",
+    "check": "node --check src/extension.js && node --check src/adapters.js && node --check media/preferences.js && node --check media/dsp.js && node --check media/app.js && node --check media/worker.js",
     "check:identity": "node scripts/check-identity.cjs",
     "package": "vsce package --no-dependencies --githubBranch main",
     "vscode:prepublish": "npm run check && npm run check:identity && npm test"

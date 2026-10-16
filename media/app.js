@@ -5,7 +5,7 @@
   const COLORS = ['#6eb8ac', '#7dabef', '#e2ac70', '#c19ae5', '#dc8492'];
   const state = { dataset: null, session: null, segment: null, columns: null, average: null, psd: null,
     shown: new Set(), view: [0, 1], psdView: null, psdDragging: null, timelineDrag: null, timelineMoved: false, timelineClickRegion: null, selection: null, event: null, psdContext: null, pinned: null,
-    request: 0, computation: 0, dragging: null, filterWarnings: [], psdError: null, mode: 'ssvep' };
+    request: 0, computation: 0, dragging: null, filterWarnings: [], psdError: null, mode: 'ssvep', preferences: {}, preferenceProfile: null };
   let worker, resolveWorker, rejectWorker, waveClickTimer;
   const workerReady = new Promise((resolve, reject) => { resolveWorker = resolve; rejectWorker = reject; });
   // ready 的拒绝在 calculate 中呈现，避免初始化失败成为未处理的 Promise。
@@ -29,6 +29,30 @@
       units: $('signal-units').value, missing: $('missing').value };
   }
   function signalUnit() { return $('signal-units').value === 'raw' ? state.segment?.rawUnit || state.segment?.unit : state.segment?.unit; }
+  function syncPreferenceControls() {
+    document.querySelector('.filter-control').hidden = $('signal-mode').value !== 'filtered';
+    $('notch-control').hidden = $('signal-mode').value === 'ssvep';
+    for (const control of document.querySelectorAll('.welch-control')) control.hidden = $('psd-method').value !== 'welch';
+    $('wave-wrap').dataset.view = $('wave-mode').value;
+  }
+  function applyPreferences(profile) {
+    const settings = EEGPreferences.resolve(state.preferences[profile], profile);
+    const option = $('signal-mode').querySelector('option[value="ssvep"]');
+    option.hidden = profile === 'assr'; option.disabled = profile === 'assr';
+    for (const [key, value] of Object.entries(settings)) {
+      const control = $(key); if (!control) continue;
+      if (control.type === 'checkbox') control.checked = value; else control.value = value;
+    }
+    state.psdView = [...settings['psd-range']];
+    state.preferenceProfile = profile; syncPreferenceControls();
+  }
+  function savePreferences(values) {
+    const profile = state.session?.profile;
+    if (!profile) return;
+    const patch = EEGPreferences.sanitize(values, profile);
+    state.preferences[profile] = { ...state.preferences[profile], ...patch };
+    vscode.postMessage({ type: 'preferences', profile, values: patch });
+  }
   function processingLabel(c = config()) {
     const filter = c.filterKind === 'ssvep' && c.filter ? 'FIR（801 taps）6–35 Hz Hamming + 50/60/100 Hz Q12.5 双节陷波，前后向零相位' : c.filter ? `2阶高通 ${c.highpass} Hz + 2阶低通 ${c.lowpass} Hz，前后向零相位` : '原始信号';
     return `${filter}${c.notch ? ' + 50 Hz Q30 零相位陷波' : ''}${c.missing === 'interpolate' ? ' · 缺失点线性插值' : ''}`;
@@ -162,6 +186,7 @@
   function selectSession(id, initialTrial) {
     state.session = state.dataset.sessions.find(s => s.id === id) || state.dataset.sessions[0];
     state.mode = state.session.profile; $('profile').value = state.mode;
+    if (state.preferenceProfile !== state.mode) applyPreferences(state.mode);
     $('search').value = ''; renderSessions();
     requestSegment(state.session.profile === 'assr' ? 'continuous' : initialTrial || state.session.trials[0]?.id);
   }
@@ -211,7 +236,9 @@
     state.segment = segment; state.selection = null; state.event = null;
     state.view = [0, duration()];
     if (segment.stages?.length) state.session.stages = segment.stages;
-    state.shown = new Set([...segment.channels, '三通道平均']);
+    const names = [...segment.channels, '三通道平均'], savedChannels = state.preferences[segment.profile]?.['visible-channels'];
+    state.shown = new Set(savedChannels ? names.filter(c => savedChannels.includes(c)) : names);
+    if (!state.shown.size) state.shown.add('三通道平均');
     $('psd-source').value = 'segment';
     $('psd-source').options[0].textContent = segment.profile === 'assr' ? '完整记录' : '完整 trial';
     $('source-event').hidden = segment.profile !== 'assr';
@@ -221,11 +248,12 @@
     const channels = $('channels'); channels.replaceChildren();
     [...segment.channels, '三通道平均'].forEach((channel, index) => {
       const label = document.createElement('label'); label.className = `checkbox channel-label`; label.style.color = COLORS[index % COLORS.length];
-      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = true; checkbox.setAttribute('aria-label', `显示 ${channel}`);
+      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = state.shown.has(channel); checkbox.setAttribute('aria-label', `显示 ${channel}`);
       checkbox.addEventListener('change', () => {
         if (checkbox.checked) state.shown.add(channel); else state.shown.delete(channel);
         // 至少保留一个通道，避免没有含义的空图。
         if (!state.shown.size) { state.shown.add(channel); checkbox.checked = true; }
+        savePreferences({ 'visible-channels': [...state.shown] });
         drawWave(); drawPSD();
       });
       label.append(checkbox, document.createTextNode(channel)); channels.append(label);
@@ -397,7 +425,7 @@
 
   function frequencyBounds() {
     const limit = (state.segment?.fs || 500) / 2;
-    const [a, b] = state.psdView || [0, Math.min(limit, 60)];
+    const [a, b] = state.psdView || (state.segment?.profile === 'ssvep' ? [6, 35] : [0, Math.min(limit, 60)]);
     // 最窄显示两个实际频率间隔；放大不改变频谱的频率分辨率。
     const width = Math.min(limit, Math.max(state.psd?.binHz * 2 || 0, b - a));
     const start = Math.max(0, Math.min(limit - width, (a + b - width) / 2));
@@ -406,6 +434,7 @@
   function setPSDView(a, b) {
     if (!state.psd?.segments || !state.segment) return;
     state.psdView = [a, b]; state.psdView = frequencyBounds();
+    savePreferences({ 'psd-range': state.psdView });
     $('psd-tooltip').hidden = true; drawPSD();
   }
   function resetPSDView() {
@@ -637,9 +666,14 @@
   $('wave').addEventListener('pointerup', finishSelection); $('wave').addEventListener('pointercancel', finishSelection);
   $('wave').addEventListener('lostpointercapture', event => finishSelection({ type: 'pointercancel', pointerId: event.pointerId }));
   $('wave').addEventListener('pointerleave', () => { $('wave-tooltip').hidden = true; });
+  function wheelZoomFactor(event) {
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 300 : 1;
+    const delta = Math.max(-100, Math.min(100, event.deltaY * unit));
+    return Math.exp(delta * Math.log(1.08) / 100);
+  }
   $('wave').addEventListener('wheel', event => {
-    if (!state.segment) return; event.preventDefault();
-    const pivot = canvasTime(event), factor = event.deltaY > 0 ? 1.3 : 1 / 1.3;
+    if (!state.segment || !event.deltaY) return; event.preventDefault();
+    const pivot = canvasTime(event), factor = wheelZoomFactor(event);
     setView(pivot - (pivot - state.view[0]) * factor, pivot + (state.view[1] - pivot) * factor);
   }, { passive: false });
   $('wave').addEventListener('dblclick', () => { clearTimeout(waveClickTimer); setView(0, duration()); });
@@ -647,7 +681,7 @@
     if (!state.psd?.segments || !state.segment || !event.deltaY) return;
     event.preventDefault(); finishPSDPan();
     const [a, b] = frequencyBounds(), { fraction } = psdPointer(event);
-    const pivot = a + fraction * (b - a), factor = event.deltaY > 0 ? 1.3 : 1 / 1.3;
+    const pivot = a + fraction * (b - a), factor = wheelZoomFactor(event);
     const width = Math.min(state.segment.fs / 2, Math.max(state.psd.binHz * 2, (b - a) * factor));
     setPSDView(pivot - fraction * width, pivot + (1 - fraction) * width);
   }, { passive: false });
@@ -700,8 +734,7 @@
     if (event.key === 'Escape' && (state.selection || state.event)) clearSelection();
   });
   for (const id of ['signal-mode', 'notch', 'highpass', 'lowpass', 'signal-units', 'missing']) $(id).addEventListener('change', () => {
-    document.querySelector('.filter-control').hidden = $('signal-mode').value !== 'filtered';
-    $('notch-control').hidden = $('signal-mode').value === 'ssvep';
+    syncPreferenceControls();
     text('wave-unit', signalUnit()); updatePinInfo();
     if ($('processing-detail')) text('processing-detail', processingLabel());
     state.columns = null; updateView(); calculate();
@@ -723,6 +756,12 @@
   });
   for (const id of ['window', 'overlap']) $(id).addEventListener('change', () => calculate());
   $('psd-scale').addEventListener('change', drawPSD);
+  for (const id of ['signal-mode', 'notch', 'highpass', 'lowpass', 'signal-units', 'missing', 'psd-method', 'window', 'overlap', 'wave-mode', 'center-wave', 'amplitude', 'psd-scale']) {
+    $(id).addEventListener('change', () => {
+      const control = $(id), value = control.type === 'checkbox' ? control.checked : control.type === 'number' ? Number(control.value) : control.value;
+      savePreferences({ [id]: value });
+    });
+  }
   $('zoom-in').addEventListener('click', () => { const [a, b] = state.view; setView(a + (b - a) / 4, b - (b - a) / 4); });
   $('zoom-out').addEventListener('click', () => { const [a, b] = state.view; setView(a - (b - a) / 2, b + (b - a) / 2); });
   $('reset-view').addEventListener('click', () => setView(0, duration()));
@@ -777,6 +816,7 @@
 
   window.addEventListener('message', ({ data: message }) => {
     if (message.type === 'dataset') {
+      state.preferences = message.preferences || state.preferences;
       state.dataset = message.data; state.mode = message.data.profile; $('profile').value = state.mode;
       selectSession(message.data.initialSession, message.data.initialTrial);
     } else if (message.type === 'segment' && message.requestId === state.request) acceptSegment(message.data);

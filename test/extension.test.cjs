@@ -8,7 +8,7 @@ const { createRequire } = require('node:module');
 const root = path.resolve(__dirname, '..');
 const uri = file => ({ scheme: 'file', fsPath: file, toString() { return `file://${file}`; } });
 
-function host(activeFile) {
+function host(activeFile, storage = new Map()) {
   const commands = new Map(), panels = [], messages = [], providers = new Map();
   const vscode = {
     ViewColumn: { Active: 1 },
@@ -22,7 +22,7 @@ function host(activeFile) {
       createWebviewPanel() {
         const panel = { title: '', onDidDispose() {}, webview: { cspSource: 'https://test.example', html: '',
           onDidReceiveMessage(callback) { this.listener = callback; },
-          postMessage() {}, asWebviewUri: value => value } };
+          postMessage(message) { (this.sent ||= []).push(message); }, asWebviewUri: value => value } };
         panels.push(panel); return panel;
       }
     }
@@ -30,7 +30,8 @@ function host(activeFile) {
   const localRequire = createRequire(path.join(root, 'src/extension.js')), module = { exports: {} };
   new Function('require', 'module', fs.readFileSync(path.join(root, 'src/extension.js'), 'utf8'))(
     name => name === 'vscode' ? vscode : localRequire(name), module);
-  module.exports.activate({ extensionUri: uri(root), extensionPath: root, subscriptions: [], extension: { packageJSON: require('../package.json') } });
+  module.exports.activate({ extensionUri: uri(root), extensionPath: root, subscriptions: [], extension: { packageJSON: require('../package.json') },
+    globalState: { get: key => storage.get(key), async update(key, value) { await new Promise(resolve => setTimeout(resolve, 2)); storage.set(key, value); } } });
   return { commands, panels, messages, providers };
 }
 
@@ -47,6 +48,25 @@ test('命令使用当前 EEG 文件，关联资源完整且没有目录选择入
   assert.ok(!html.includes('id="open"'));
   assert.ok(!html.includes('id="welcome"'));
   assert.equal(instance.providers.size, 2);
+});
+
+test('本机偏好跨编辑器和扩展重启保存，局部并发修改不丢失，SSVEP 与 ASSR 独立', async () => {
+  const storage = new Map(), instance = host('/records/test_eeg.csv', storage);
+  await instance.commands.get('kieranEEG.open')(); await instance.commands.get('kieranEEG.open')();
+  const [a, b] = instance.panels.map(p => p.webview);
+  await Promise.all([
+    a.listener({ type: 'preferences', profile: 'ssvep', values: { window: '8', 'signal-mode': 'ssvep', unknown: 'ignored' } }),
+    b.listener({ type: 'preferences', profile: 'ssvep', values: { 'signal-units': 'raw', 'psd-range': [9, 20] } }),
+    b.listener({ type: 'preferences', profile: 'assr', values: { window: '2', 'signal-mode': 'ssvep' } })
+  ]);
+  assert.deepEqual(storage.get('viewer.preferences.v1.ssvep'), { window: '8', 'signal-mode': 'ssvep', 'signal-units': 'raw', 'psd-range': [9, 20] });
+  assert.deepEqual(storage.get('viewer.preferences.v1.assr'), { window: '2' });
+  assert.ok(a.sent.some(m => m.type === 'preferences-saved'));
+  const restarted = host('/records/test_eeg.csv', storage); await restarted.commands.get('kieranEEG.open')();
+  await restarted.panels[0].webview.listener({ type: 'preferences', profile: 'ssvep', values: { overlap: '0.75' } });
+  assert.equal(storage.get('viewer.preferences.v1.ssvep').window, '8');
+  assert.equal(storage.get('viewer.preferences.v1.ssvep').overlap, '0.75');
+  assert.equal(storage.get('viewer.preferences.v1.assr').window, '2');
 });
 
 test('没有当前 EEG 文件时不建立空白 Webview 或弹出目录选择器', async () => {

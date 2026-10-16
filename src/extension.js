@@ -5,8 +5,12 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
 const { discover, publicDataset, RecordingCache, loadSegment } = require('./adapters');
+const preferences = require('../media/preferences');
 
 function activate(context) {
+  const preferenceKey = profile => `viewer.preferences.v1.${profile}`;
+  const readPreferences = () => Object.fromEntries(['ssvep', 'assr'].map(profile => [profile, preferences.resolve(context.globalState.get(preferenceKey(profile)), profile)]));
+  let preferenceWrites = Promise.resolve();
   const resourceRoots = ['media', 'assets'].map(folder => vscode.Uri.joinPath(context.extensionUri, folder));
   async function open(uri, profile = 'auto') {
     uri = uri || vscode.window.tabGroups.activeTabGroup?.activeTab?.input?.uri || vscode.window.activeTextEditor?.document.uri;
@@ -34,7 +38,9 @@ function activate(context) {
       profile = next.sessions.find(session => session.id === next.initialSession).profile;
       cache.clear();
       panel.title = `EEG · ${path.basename(next.root)}`;
-      await send({ type: 'dataset', data: publicDataset(next) });
+      await preferenceWrites.catch(() => {});
+      if (disposed || current !== version) return;
+      await send({ type: 'dataset', data: publicDataset(next), preferences: readPreferences() });
     }
 
     panel.webview.onDidReceiveMessage(async message => {
@@ -51,6 +57,18 @@ function activate(context) {
           if (!dataset || !Number.isSafeInteger(message.requestId)) return;
           const current = version, data = await loadSegment(dataset, message.sessionId, message.segmentId, cache);
           if (current === version) await send({ type: 'segment', requestId: message.requestId, data });
+        } else if (message.type === 'preferences') {
+          if (!['ssvep', 'assr'].includes(message.profile)) return;
+          const patch = preferences.sanitize(message.values, message.profile), key = preferenceKey(message.profile);
+          if (!Object.keys(patch).length) return;
+          // 串行合并局部修改，多个编辑器的不同参数不会互相覆盖。
+          const write = preferenceWrites.catch(() => {}).then(async () => {
+            const saved = preferences.sanitize(context.globalState.get(key), message.profile);
+            await context.globalState.update(key, { ...saved, ...patch });
+          });
+          preferenceWrites = write;
+          await write;
+          await send({ type: 'preferences-saved', profile: message.profile });
         } else if (message.type === 'export') {
           if (!['csv', 'png'].includes(message.format) || typeof message.content !== 'string' || message.content.length > 24 * 1024 * 1024) return;
           let bytes;
@@ -65,7 +83,7 @@ function activate(context) {
           if (target) { await vscode.workspace.fs.writeFile(target, bytes); vscode.window.showInformationMessage(`EEG 已导出：${target.fsPath}`); }
         }
       } catch (error) {
-        await send({ type: 'error', requestId: message.requestId, scope: message.type === 'segment' ? 'segment' : 'dataset', message: error.message });
+        await send({ type: 'error', requestId: message.requestId, scope: message.type === 'preferences' ? 'preferences' : message.type === 'segment' ? 'segment' : 'dataset', message: error.message });
       }
     }, undefined, context.subscriptions);
     panel.onDidDispose(() => { disposed = true; version++; cache.clear(); });
@@ -75,6 +93,7 @@ function activate(context) {
     const html = await fs.readFile(path.join(context.extensionPath, 'media', 'index.html'), 'utf8');
     panel.webview.html = html.replaceAll('{{CSP}}', panel.webview.cspSource).replaceAll('{{NONCE}}', nonce)
       .replaceAll('{{STYLE}}', media('style.css')).replaceAll('{{APP}}', media('app.js'))
+      .replaceAll('{{PREFERENCES}}', media('preferences.js'))
       .replaceAll('{{WORKER}}', media('worker.js')).replaceAll('{{DSP}}', media('dsp.js'))
       .replaceAll('{{ICON}}', panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'assets', 'icon.png')).toString())
       .replaceAll('{{VERSION}}', context.extension.packageJSON.version);

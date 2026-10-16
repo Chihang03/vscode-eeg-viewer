@@ -56,9 +56,9 @@
             <label>纵轴<select id="psd-scale"><option value="db">dB</option><option value="linear">线性</option></select></label>
             <details class="psd-advanced"><summary>高级</summary><div>
               <label>算法<select id="psd-method"><option value="full">整段</option><option value="welch" selected>Welch 平均</option></select></label>
-              <label class="welch-control">窗长<select id="window"><option value="2" selected>2 s</option><option value="4">4 s</option><option value="8">8 s</option></select></label>
+              <label class="welch-control">窗长<select id="window"><option value="2">2 s</option><option value="4" selected>4 s</option><option value="8">8 s</option></select></label>
               <label class="welch-control">重叠<select id="overlap"><option value="0.5" selected>50%</option><option value="0">0%</option><option value="0.75">75%</option></select></label>
-              <label>单位<select id="signal-units"><option value="metadata">元数据换算</option><option value="raw" selected>采集原值</option></select></label>
+              <label>单位<select id="signal-units"><option value="metadata" selected>元数据换算</option><option value="raw">采集原值</option></select></label>
               <label>缺失点<select id="missing"><option value="preserve">保留缺口</option><option value="interpolate" selected>线性插值</option></select></label>
             </div></details>
           </div>
@@ -70,6 +70,7 @@
       </div>
     </main>
   </div>
+  <script nonce="{{NONCE}}" src="{{PREFERENCES}}"></script>
   <script nonce="{{NONCE}}" src="{{APP}}"></script>
 </body>
 </html>
