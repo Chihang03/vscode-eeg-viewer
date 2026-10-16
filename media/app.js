@@ -4,7 +4,7 @@
   const vscode = acquireVsCodeApi();
   const COLORS = ['#6eb8ac', '#7dabef', '#e2ac70', '#c19ae5', '#dc8492'];
   const state = { dataset: null, session: null, segment: null, columns: null, average: null, psd: null,
-    shown: new Set(), view: [0, 1], psdView: null, psdDragging: null, selection: null, event: null, psdContext: null, pinned: null,
+    shown: new Set(), view: [0, 1], psdView: null, psdDragging: null, timelineDrag: null, timelineMoved: false, timelineClickRegion: null, selection: null, event: null, psdContext: null, pinned: null,
     request: 0, computation: 0, dragging: null, filterWarnings: [], psdError: null, mode: 'ssvep' };
   let worker, resolveWorker, rejectWorker, waveClickTimer;
   const workerReady = new Promise((resolve, reject) => { resolveWorker = resolve; rejectWorker = reject; });
@@ -174,10 +174,11 @@
     else notice('该事件没有可用的 EEG 样本区间。', true);
   }
   function selectEvent(event, zoom = false) {
+    const unchanged = state.event === event && !state.selection && $('psd-source').value === 'event';
     state.event = event; state.selection = null; $('psd-source').value = 'event';
     if (zoom) setView(event.start / state.segment.fs, event.end / state.segment.fs);
     else updateView();
-    renderTrials(); calculate();
+    renderTrials(); if (!unchanged) calculate();
   }
   function eventAt(sample) {
     const matches = state.segment.regions.filter(r => r.start <= sample && r.end > sample);
@@ -186,6 +187,7 @@
   }
   function requestSegment(id) {
     clearTimeout(waveClickTimer);
+    finishTimelinePan(true);
     finishPSDPan();
     state.request++; state.computation++; state.requestedId = id;
     state.segment = null; state.columns = null; state.average = null; state.psd = null; state.psdContext = null; state.selection = null; state.event = null; state.dragging = null;
@@ -196,7 +198,7 @@
     text('compute-status', '读取中…'); text('psd-info', ''); text('selection-label', ''); $('selection-footer').hidden = true;
     for (const id of ['export-png', 'export-csv', 'pin', 'zoom-selection', 'clear-selection']) $(id).disabled = true;
     $('channels').replaceChildren(); $('details').replaceChildren();
-    $('event-strip').hidden = true;
+    $('timeline').hidden = true;
     renderTrials(); drawWave(); drawPSD();
     vscode.postMessage({ type: 'segment', sessionId: state.session.id, segmentId: id, requestId: state.request });
   }
@@ -209,7 +211,7 @@
     $('psd-source').value = 'segment';
     $('psd-source').options[0].textContent = segment.profile === 'assr' ? '完整记录' : '完整 trial';
     $('source-event').hidden = segment.profile !== 'assr';
-    buildEventStrip();
+    buildTimeline();
     text('record-title', segment.label); text('record-subtitle', `${segment.sessionLabel} · ${segment.sampleCount.toLocaleString()} 样本 · ${format(duration(), 3)} s`);
     text('wave-unit', segment.unit);
     const channels = $('channels'); channels.replaceChildren();
@@ -227,29 +229,29 @@
     renderTrials(); renderDetails(); updateView(); updatePinInfo(); updateWarnings(); calculate(true);
   }
 
-  function buildEventStrip() {
-    const strip = $('event-strip'); strip.replaceChildren();
-    if (state.segment.profile !== 'assr') { strip.hidden = true; return; }
+  function buildTimeline() {
+    const strip = $('timeline-events'); strip.replaceChildren();
     state.segment.regions.forEach((event, index) => {
       const button = document.createElement('button'); button.type = 'button'; button.dataset.region = index; button.dataset.kind = event.kind;
       button.textContent = event.label;
       button.title = `${event.label} · ${format(event.start / state.segment.fs, 3)}–${format(event.end / state.segment.fs, 3)} s${event.valid ? '' : ' · 采集标记无效'}`;
       button.setAttribute('aria-label', button.title);
-      button.addEventListener('click', () => selectEvent(event));
-      button.addEventListener('dblclick', () => selectEvent(event, true));
       strip.append(button);
     });
-    strip.hidden = !strip.children.length;
+    $('timeline').hidden = false;
   }
-  function updateEventStrip() {
-    if (!state.segment || $('event-strip').hidden) return;
-    const [a, b] = state.view, fs = state.segment.fs;
-    for (const button of $('event-strip').children) {
-      const event = state.segment.regions[button.dataset.region], start = Math.max(a, event.start / fs), end = Math.min(b, event.end / fs);
-      button.hidden = end <= start;
-      button.style.left = `${(start - a) / (b - a) * 100}%`; button.style.width = `${Math.max(0, (end - start) / (b - a) * 100)}%`;
+  function updateTimeline() {
+    if (!state.segment || $('timeline').hidden) return;
+    const [a, b] = state.view, total = duration();
+    for (const button of $('timeline-events').children) {
+      const event = state.segment.regions[button.dataset.region];
+      button.style.left = `${event.start / state.segment.sampleCount * 100}%`; button.style.width = `${(event.end - event.start) / state.segment.sampleCount * 100}%`;
       button.setAttribute('aria-pressed', String(state.event?.id === event.id));
     }
+    const view = $('timeline-view'), available = Math.max(0, total - (b - a));
+    view.style.left = `${a / total * 100}%`; view.style.width = `${(b - a) / total * 100}%`;
+    view.setAttribute('aria-valuemin', '0'); view.setAttribute('aria-valuemax', String(available)); view.setAttribute('aria-valuenow', String(a));
+    view.setAttribute('aria-valuetext', `${format(a)}–${format(b)} s`); view.setAttribute('aria-disabled', String(available === 0)); view.tabIndex = available > 0 ? 0 : -1;
   }
 
   function renderDetails() {
@@ -287,10 +289,8 @@
   }
   function updateView() {
     if (!state.segment) return;
-    const total = duration(), [a, b] = state.view;
+    const [a, b] = state.view;
     text('view-range', `${format(a)}–${format(b)} s`);
-    $('pan').value = b - a >= total ? '0' : String(Math.round(a / (total - (b - a)) * 1000));
-    $('pan').disabled = b - a >= total;
     $('source-event').disabled = !state.event; $('source-selection').disabled = !state.selection;
     const selection = state.selection || (state.event ? [state.event.start / state.segment.fs, state.event.end / state.segment.fs] : null);
     $('selection-footer').hidden = !selection;
@@ -329,7 +329,7 @@
   function shownIndices() { return state.segment?.channels.map((c, i) => state.shown.has(c) ? i : -1).filter(i => i >= 0) || []; }
 
   function drawWave() {
-    updateEventStrip();
+    updateTimeline();
     const p = prepareCanvas('wave'), { ctx, left, right, top, bottom, muted, border } = p;
     if (!state.columns || !state.average || !state.segment) { canvasEmpty(p, state.psdError || ''); return; }
     const [a, b] = state.view, fs = state.segment.fs, width = right - left;
@@ -521,6 +521,71 @@
     }
     return sample / fs;
   }
+  function timelinePointer(event) {
+    const rect = $('timeline').getBoundingClientRect(), width = Math.max(1, rect.width);
+    return { width, time: Math.max(0, Math.min(1, (event.clientX - rect.left) / width)) * duration() };
+  }
+  function finishTimelinePan(cancel = false) {
+    const drag = state.timelineDrag;
+    if (!drag) return;
+    state.timelineDrag = null; state.timelineMoved = cancel || drag.moved;
+    $('timeline').classList.remove('dragging');
+    if ($('timeline').hasPointerCapture(drag.pointerId)) $('timeline').releasePointerCapture(drag.pointerId);
+    if (cancel) setView(...drag.view);
+  }
+  $('timeline').addEventListener('pointerdown', event => {
+    if (!state.segment || event.button !== 0) return;
+    state.timelineMoved = false; clearTimeout(waveClickTimer);
+    const button = event.target.closest('button[data-region]');
+    state.timelineClickRegion = button ? state.segment.regions[button.dataset.region] : null;
+    const { width, time } = timelinePointer(event), [a, b] = state.view, total = duration();
+    const tolerance = 6 * total / width;
+    if (b - a >= total || time < a - tolerance || time > b + tolerance) return;
+    state.timelineDrag = { x: event.clientX, width, total, view: [a, b], pointerId: event.pointerId, moved: false };
+    $('timeline').setPointerCapture(event.pointerId);
+  });
+  $('timeline').addEventListener('pointermove', event => {
+    if (!state.segment) return;
+    const drag = state.timelineDrag;
+    if (drag) {
+      if (!drag.moved && Math.abs(event.clientX - drag.x) < 4) return;
+      drag.moved = true; $('timeline').classList.add('dragging');
+      $('timeline-view').focus({ preventScroll: true });
+      const delta = (event.clientX - drag.x) / drag.width * drag.total;
+      setView(drag.view[0] + delta, drag.view[1] + delta); event.preventDefault(); return;
+    }
+    const { time } = timelinePointer(event), [a, b] = state.view;
+    $('timeline').classList.toggle('can-pan', b - a < duration() && time >= a && time <= b);
+  });
+  $('timeline').addEventListener('pointerleave', () => $('timeline').classList.remove('can-pan'));
+  $('timeline').addEventListener('pointerup', () => finishTimelinePan());
+  for (const type of ['pointercancel', 'lostpointercapture']) $('timeline').addEventListener(type, () => finishTimelinePan(true));
+  function timelineEvent(event) {
+    const button = event.target.closest('button[data-region]');
+    if (button) return state.segment.regions[button.dataset.region];
+    if (event.detail !== 0 && state.timelineClickRegion) return state.timelineClickRegion;
+    const sample = Math.min(state.segment.sampleCount - 1, Math.floor(timelinePointer(event).time * state.segment.fs));
+    return eventAt(sample);
+  }
+  $('timeline').addEventListener('click', event => {
+    if (!state.segment || (state.timelineMoved && event.detail !== 0)) return;
+    const region = timelineEvent(event);
+    if (region) selectEvent(region);
+    else if (event.detail !== 0) { const width = state.view[1] - state.view[0], center = timelinePointer(event).time; setView(center - width / 2, center + width / 2); }
+  });
+  $('timeline').addEventListener('dblclick', event => {
+    if (!state.segment || state.timelineMoved) return;
+    const region = timelineEvent(event);
+    if (region) selectEvent(region, true);
+  });
+  $('timeline-view').addEventListener('keydown', event => {
+    if (!state.segment || event.altKey || !['ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    const [a, b] = state.view, width = b - a;
+    if (event.key === 'Home') setView(0, width);
+    else if (event.key === 'End') setView(duration() - width, duration());
+    else { const delta = width * (event.key.startsWith('Page') ? 0.9 : 0.1) * (['ArrowLeft', 'PageUp'].includes(event.key) ? -1 : 1); setView(a + delta, b + delta); }
+  });
   function tooltip(id, event, content) {
     const target = $(id), parent = target.parentElement.getBoundingClientRect();
     target.hidden = false; target.textContent = content;
@@ -622,6 +687,7 @@
     if (event.altKey && ['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); navigate(event.key === 'ArrowLeft' ? -1 : 1); }
     if (event.key === 'Escape') {
       clearTimeout(waveClickTimer);
+      if (state.timelineDrag) { finishTimelinePan(true); return; }
       if (state.dragging) { finishSelection({ type: 'pointercancel', pointerId: state.dragging.pointerId }); return; }
     }
     if (event.key === 'Escape' && (state.selection || state.event)) clearSelection();
@@ -660,9 +726,6 @@
     $('psd-source').value = state.event ? 'event' : 'segment'; updateView(); renderTrials(); calculate();
   }
   $('clear-selection').addEventListener('click', clearSelection);
-  function pan(delta) { const [a, b] = state.view; setView(a + delta * (b - a), b + delta * (b - a)); }
-  $('pan-left').addEventListener('click', () => pan(-0.75)); $('pan-right').addEventListener('click', () => pan(0.75));
-  $('pan').addEventListener('input', () => { const width = state.view[1] - state.view[0], a = Number($('pan').value) / 1000 * (duration() - width); setView(a, a + width); });
   $('pin').addEventListener('click', () => {
     if (!state.psd?.segments) return;
     state.pinned = { psd: state.psd, label: state.psdContext.label, sessionLabel: state.segment.sessionLabel,
